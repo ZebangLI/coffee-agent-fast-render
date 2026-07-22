@@ -207,10 +207,11 @@ def list_shop_orders(shop_id: str) -> list[dict]:
             dict(row)
             for row in conn.execute(
                 """
-                SELECT orders.*, products.name AS product_name
+                SELECT orders.*, products.name AS product_name, shops.name AS shop_name
                 FROM orders
                 JOIN products ON products.id = orders.product_id
-                WHERE orders.shop_id = ?
+                JOIN shops ON shops.id = products.shop_id
+                WHERE products.shop_id = ?
                 ORDER BY orders.created_at DESC
                 LIMIT 50
                 """,

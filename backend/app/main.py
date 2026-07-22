@@ -235,6 +235,8 @@ def merchant() -> HTMLResponse:
     main {{ max-width:1120px; margin:0 auto; padding:20px; display:grid; grid-template-columns:240px 1fr; gap:16px; }}
     section {{ background:white; border:1px solid #ded8cf; border-radius:8px; padding:16px; }}
     button {{ margin:0 0 8px; border:0; border-radius:6px; padding:9px 11px; background:#176b54; color:white; cursor:pointer; }}
+    .shops button {{ display:block; width:100%; text-align:left; }}
+    .shops button.active {{ outline:2px solid #20352d; background:#0f5e49; }}
     table {{ width:100%; border-collapse:collapse; font-size:14px; }}
     th,td {{ border-bottom:1px solid #eee7df; text-align:left; padding:9px; }}
     input {{ width:80px; padding:7px; }}
@@ -243,20 +245,28 @@ def merchant() -> HTMLResponse:
 <body>
 <header><h1>Merchant Console</h1></header>
 <main>
-  <section><h2>Shops</h2>{buttons}</section>
+  <section class="shops"><h2>Shops</h2>{buttons}</section>
   <section><h2>Products</h2><div id="products"></div><h2>Orders</h2><div id="orders"></div></section>
 </main>
 <script>
 let current = "{escape(shops[0]['id']) if shops else ''}";
 async function api(path, options={{}}){{ const r=await fetch(path,{{headers:{{"Content-Type":"application/json"}},...options}}); const t=await r.text(); const d=t?JSON.parse(t):{{}}; if(!r.ok) throw new Error(d.detail||t); return d; }}
-async function selectShop(id){{ current=id; await Promise.all([loadProducts(),loadOrders()]); }}
+async function selectShop(id){{
+ current=id;
+ document.querySelectorAll(".shops button").forEach(btn => btn.classList.toggle("active", btn.getAttribute("onclick").includes(id)));
+ document.getElementById("products").innerHTML="Loading products...";
+ document.getElementById("orders").innerHTML="Loading orders...";
+ await Promise.all([loadProducts(),loadOrders()]);
+}}
 async function loadProducts(){{
  const rows=await api(`/api/merchant/shops/${{current}}/products`);
  document.getElementById("products").innerHTML=`<table><tr><th>Name</th><th>Price</th><th>Inventory</th><th></th></tr>${{rows.map(r=>`<tr><td>${{r.name}}</td><td>$${{Number(r.price).toFixed(2)}}</td><td><input id="inv-${{r.id}}" value="${{r.inventory}}" type="number"></td><td><button onclick="saveInv('${{r.id}}')">Save</button></td></tr>`).join("")}}</table>`;
 }}
 async function loadOrders(){{
  const rows=await api(`/api/merchant/shops/${{current}}/orders`);
- document.getElementById("orders").innerHTML=`<table><tr><th>Order</th><th>Product</th><th>Total</th><th>Status</th></tr>${{rows.map(r=>`<tr><td>${{r.id}}</td><td>${{r.product_name}}</td><td>$${{Number(r.total).toFixed(2)}}</td><td>${{r.status}}</td></tr>`).join("")}}</table>`;
+ document.getElementById("orders").innerHTML=rows.length
+  ? `<table><tr><th>Order</th><th>Shop</th><th>Product</th><th>Total</th><th>Status</th></tr>${{rows.map(r=>`<tr><td>${{r.id}}</td><td>${{r.shop_name}}</td><td>${{r.product_name}}</td><td>$${{Number(r.total).toFixed(2)}}</td><td>${{r.status}}</td></tr>`).join("")}}</table>`
+  : "<p>No orders for this shop yet.</p>";
 }}
 async function saveInv(id){{ await api(`/api/merchant/products/${{id}}/inventory`,{{method:"POST",body:JSON.stringify({{inventory:Number(document.getElementById(`inv-${{id}}`).value)}})}}); await loadProducts(); }}
 selectShop(current);

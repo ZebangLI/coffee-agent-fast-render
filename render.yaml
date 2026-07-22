@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: coffee-agent-fast-render
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: CLOUD_LLM_PROVIDER
+        value: groq
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
+      - key: AIGENTIC_PAY_ENABLED
+        value: "0"
+      - key: AIGENTIC_PAY_USE_VIRTUAL_CARD
+        value: "0"
+      - key: AIGENTIC_PAY_REQUIRE_ONCHAIN
+        value: "0"

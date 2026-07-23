@@ -19,13 +19,16 @@ from .database import (
     recommend_products,
     update_inventory,
 )
-from .llm import llm_status, parse_intent, transcribe_audio
+from .llm import llm_status, parse_intent, parse_selection, transcribe_audio
 from .models import (
     ChatRequest,
     ChatResponse,
     CreateOrderRequest,
     Location,
     OrderResponse,
+    SelectionRequest,
+    SelectionResponse,
+    TranscriptionResponse,
     UpdateInventoryRequest,
     VoiceChatResponse,
 )
@@ -54,6 +57,17 @@ def chat(request: ChatRequest) -> ChatResponse:
     return _chat_from_text(request.message, request.location)
 
 
+@app.post("/api/selection", response_model=SelectionResponse)
+def selection(request: SelectionRequest) -> SelectionResponse:
+    return SelectionResponse(selected_index=parse_selection(request.message, request.option_count))
+
+
+@app.post("/api/voice/transcribe", response_model=TranscriptionResponse)
+async def voice_transcribe(audio: UploadFile = File(...)) -> TranscriptionResponse:
+    transcript = await _transcribe_upload(audio)
+    return TranscriptionResponse(transcript=transcript)
+
+
 @app.post("/api/voice/chat", response_model=VoiceChatResponse)
 async def voice_chat(
     audio: UploadFile = File(...),
@@ -62,21 +76,7 @@ async def voice_chat(
     lng: float = Form(-73.992),
 ) -> VoiceChatResponse:
     del user_id
-    audio_bytes = await audio.read()
-    max_bytes = int(os.environ.get("MAX_VOICE_UPLOAD_BYTES", str(10 * 1024 * 1024)))
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="No audio received.")
-    if len(audio_bytes) > max_bytes:
-        raise HTTPException(status_code=413, detail="Audio file is too large.")
-
-    transcript = transcribe_audio(
-        audio_bytes,
-        audio.filename or "voice.webm",
-        audio.content_type or "audio/webm",
-    )
-    if not transcript:
-        raise HTTPException(status_code=503, detail="Speech transcription failed.")
-
+    transcript = await _transcribe_upload(audio)
     try:
         chat_response = _chat_from_text(transcript, Location(lat=lat, lng=lng))
     except HTTPException as exc:
@@ -178,6 +178,24 @@ def _chat_from_text(message: str, location: Location) -> ChatResponse:
     return ChatResponse(intent=intent, recommendations=recommendations)
 
 
+async def _transcribe_upload(audio: UploadFile) -> str:
+    audio_bytes = await audio.read()
+    max_bytes = int(os.environ.get("MAX_VOICE_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="No audio received.")
+    if len(audio_bytes) > max_bytes:
+        raise HTTPException(status_code=413, detail="Audio file is too large.")
+
+    transcript = transcribe_audio(
+        audio_bytes,
+        audio.filename or "voice.webm",
+        audio.content_type or "audio/webm",
+    )
+    if not transcript:
+        raise HTTPException(status_code=503, detail="Speech transcription failed.")
+    return transcript
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> HTMLResponse:
     return HTMLResponse(
@@ -263,8 +281,19 @@ function renderRecs(data){
     <div class="muted">${x.product_name}</div><span class="pill">${x.distance_km} km</span><span class="pill">${x.wait_minutes} min</span><span class="pill">score ${x.score}</span>
     <div><button onclick="order(${i})">Order this</button></div></div>`).join("")}</div>`);
 }
-async function sendText(message){
-  add("user",message); add("agent","Checking nearby coffee shops...");
+async function handleUserMessage(message, label){
+  add("user", label || message);
+  if(latest.length){
+    add("agent","Checking your selection...");
+    try{
+      const pick = await api("/api/selection",{method:"POST",body:JSON.stringify({message, option_count:latest.length})});
+      if(pick.selected_index !== null && pick.selected_index !== undefined){
+        await order(pick.selected_index);
+        return;
+      }
+    }catch(e){ add("error",e.message); return; }
+  }
+  add("agent","Checking nearby coffee shops...");
   try{ renderRecs(await api("/api/chat",{method:"POST",body:JSON.stringify({message})})); }catch(e){ add("error",e.message); }
 }
 async function order(i){
@@ -285,7 +314,7 @@ async function loadOrders(){
 document.getElementById("send").onclick=async()=>{
   const m=document.getElementById("message").value.trim(); if(!m) return;
   document.getElementById("message").value="";
-  sendText(m);
+  handleUserMessage(m);
 };
 document.getElementById("voice").onclick=async()=>{
   const button = document.getElementById("voice");
@@ -307,9 +336,8 @@ document.getElementById("voice").onclick=async()=>{
       form.append("audio", blob, "voice.webm");
       add("agent","Transcribing voice...");
       try{
-        const data = await apiForm("/api/voice/chat", form);
-        add("user",`Voice: ${data.transcript}`);
-        renderRecs(data);
+        const data = await apiForm("/api/voice/transcribe", form);
+        await handleUserMessage(data.transcript, `Voice heard: ${data.transcript}`);
       }catch(e){
         if(e.transcript) add("user",`Voice heard: ${e.transcript}`);
         add("error",e.message);

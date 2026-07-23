@@ -38,6 +38,19 @@ class VoiceChatResponse(ChatResponse):
     transcript: str
 
 
+class TranscriptionResponse(BaseModel):
+    transcript: str
+
+
+class SelectionRequest(BaseModel):
+    message: str
+    option_count: int = Field(ge=1, le=10)
+
+
+class SelectionResponse(BaseModel):
+    selected_index: int | None = None
+
+
 class CreateOrderRequest(BaseModel):
     user_id: str = "u_001"
     product_id: str

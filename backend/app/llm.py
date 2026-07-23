@@ -30,6 +30,17 @@ If the drink is unclear, return {"drink": null}.
 Use null for unknown optional fields.
 """
 
+SELECTION_PROMPT = """
+You interpret whether a user is selecting one item from a numbered recommendation list.
+Return only JSON with this exact key: selected_index.
+selected_index is zero-based. Examples:
+- first one, order the first, number one -> 0
+- second one, buy option 2, the Starbucks one -> 1
+- third, last one -> 2
+If the user is asking for a new coffee search instead of selecting an existing option, return {"selected_index": null}.
+If unclear, return {"selected_index": null}.
+"""
+
 
 def parse_intent(message: str) -> DrinkIntent | None:
     api_key = os.environ.get("GROQ_API_KEY")
@@ -119,6 +130,53 @@ def transcribe_audio(audio: bytes, filename: str, content_type: str) -> str | No
         text = str(data.get("text") or "").strip()
         return text or None
     except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def parse_selection(message: str, option_count: int) -> int | None:
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return None
+
+    payload = {
+        "model": os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL),
+        "temperature": 0,
+        "messages": [
+            {"role": "system", "content": SELECTION_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"There are {option_count} numbered coffee options. "
+                    f"User message: {message}"
+                ),
+            },
+        ],
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        request = urllib.request.Request(
+            "https://api.groq.com/openai/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "User-Agent": "coffee-agent-fast-render/1.0",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=float(os.environ.get("GROQ_TIMEOUT_SECONDS", "12"))) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        content = body.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+        data = json.loads(_strip_code_fence(content))
+        raw_index = data.get("selected_index")
+        if raw_index is None:
+            return None
+        selected_index = int(raw_index)
+        if 0 <= selected_index < option_count:
+            return selected_index
+        return None
+    except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None
 
 

@@ -11,6 +11,10 @@ from .models import DrinkIntent
 
 DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 DEFAULT_GROQ_TRANSCRIPTION_MODEL = "whisper-large-v3-turbo"
+DEFAULT_TRANSCRIPTION_PROMPT = (
+    "Coffee ordering app. Common phrases include: I want a latte, "
+    "iced americano, cold brew, Starbucks, Campus Cafe, Local Cafe, order this."
+)
 
 SYSTEM_PROMPT = """
 You extract coffee ordering intent from a short user message.
@@ -74,13 +78,19 @@ def transcribe_audio(audio: bytes, filename: str, content_type: str) -> str | No
         return None
 
     boundary = f"----coffee-agent-{uuid.uuid4().hex}"
+    fields = {
+        "model": os.environ.get("GROQ_TRANSCRIPTION_MODEL", DEFAULT_GROQ_TRANSCRIPTION_MODEL),
+        "response_format": "json",
+        "temperature": "0",
+        "prompt": os.environ.get("GROQ_TRANSCRIPTION_PROMPT", DEFAULT_TRANSCRIPTION_PROMPT),
+    }
+    language = os.environ.get("GROQ_TRANSCRIPTION_LANGUAGE", "en").strip()
+    if language:
+        fields["language"] = language
+
     body = _multipart_body(
         boundary,
-        fields={
-            "model": os.environ.get("GROQ_TRANSCRIPTION_MODEL", DEFAULT_GROQ_TRANSCRIPTION_MODEL),
-            "response_format": "json",
-            "temperature": "0",
-        },
+        fields=fields,
         files={
             "file": {
                 "filename": filename or "voice.webm",
@@ -118,6 +128,7 @@ def llm_status() -> dict[str, Any]:
         "provider": "groq",
         "model": os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL),
         "transcription_model": os.environ.get("GROQ_TRANSCRIPTION_MODEL", DEFAULT_GROQ_TRANSCRIPTION_MODEL),
+        "transcription_language": os.environ.get("GROQ_TRANSCRIPTION_LANGUAGE", "en"),
     }
 
 

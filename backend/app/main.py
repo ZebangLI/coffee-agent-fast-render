@@ -77,7 +77,18 @@ async def voice_chat(
     if not transcript:
         raise HTTPException(status_code=503, detail="Speech transcription failed.")
 
-    chat_response = _chat_from_text(transcript, Location(lat=lat, lng=lng))
+    try:
+        chat_response = _chat_from_text(transcript, Location(lat=lat, lng=lng))
+    except HTTPException as exc:
+        if exc.status_code == 503:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "message": "Cloud LLM did not detect a coffee order.",
+                    "transcript": transcript,
+                },
+            ) from exc
+        raise
     return VoiceChatResponse(
         transcript=transcript,
         intent=chat_response.intent,
@@ -231,7 +242,19 @@ let recording = false;
 const log = document.getElementById("log");
 function add(role, html){ const n=document.createElement("div"); n.className=`msg ${role}`; n.innerHTML=html; log.appendChild(n); log.scrollTop=log.scrollHeight; return n; }
 async function api(path, options={}){ const r=await fetch(path,{headers:{"Content-Type":"application/json"},...options}); const t=await r.text(); const d=t?JSON.parse(t):{}; if(!r.ok) throw new Error(d.detail||t||r.status); return d; }
-async function apiForm(path, form){ const r=await fetch(path,{method:"POST",body:form}); const t=await r.text(); const d=t?JSON.parse(t):{}; if(!r.ok) throw new Error(d.detail||t||r.status); return d; }
+async function apiForm(path, form){
+  const r=await fetch(path,{method:"POST",body:form});
+  const t=await r.text();
+  const d=t?JSON.parse(t):{};
+  if(!r.ok){
+    const detail=d.detail;
+    const message=detail && typeof detail === "object" ? detail.message : (detail || t || r.status);
+    const err=new Error(message);
+    if(detail && typeof detail === "object") err.transcript=detail.transcript;
+    throw err;
+  }
+  return d;
+}
 function renderRecs(data){
   latest=data.recommendations||[];
   if(!latest.length){ add("agent","No matching coffee nearby."); return; }
@@ -287,7 +310,10 @@ document.getElementById("voice").onclick=async()=>{
         const data = await apiForm("/api/voice/chat", form);
         add("user",`Voice: ${data.transcript}`);
         renderRecs(data);
-      }catch(e){ add("error",e.message); }
+      }catch(e){
+        if(e.transcript) add("user",`Voice heard: ${e.transcript}`);
+        add("error",e.message);
+      }
     };
     recorder.start();
     recording = true;

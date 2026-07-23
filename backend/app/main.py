@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
 from html import escape
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 
 from .database import (
@@ -18,8 +19,16 @@ from .database import (
     recommend_products,
     update_inventory,
 )
-from .llm import llm_status, parse_intent
-from .models import ChatRequest, ChatResponse, CreateOrderRequest, OrderResponse, UpdateInventoryRequest
+from .llm import llm_status, parse_intent, transcribe_audio
+from .models import (
+    ChatRequest,
+    ChatResponse,
+    CreateOrderRequest,
+    Location,
+    OrderResponse,
+    UpdateInventoryRequest,
+    VoiceChatResponse,
+)
 from .payment import record_payment
 
 app = FastAPI(title="Coffee Agent Fast Render", version="0.2.0")
@@ -42,11 +51,38 @@ def api_llm_status() -> dict:
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
-    intent = parse_intent(request.message)
-    if intent is None:
-        raise HTTPException(status_code=503, detail="Cloud LLM did not detect a coffee order.")
-    recommendations = recommend_products(intent.drink, request.location)
-    return ChatResponse(intent=intent, recommendations=recommendations)
+    return _chat_from_text(request.message, request.location)
+
+
+@app.post("/api/voice/chat", response_model=VoiceChatResponse)
+async def voice_chat(
+    audio: UploadFile = File(...),
+    user_id: str = Form("u_001"),
+    lat: float = Form(40.731),
+    lng: float = Form(-73.992),
+) -> VoiceChatResponse:
+    del user_id
+    audio_bytes = await audio.read()
+    max_bytes = int(os.environ.get("MAX_VOICE_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="No audio received.")
+    if len(audio_bytes) > max_bytes:
+        raise HTTPException(status_code=413, detail="Audio file is too large.")
+
+    transcript = transcribe_audio(
+        audio_bytes,
+        audio.filename or "voice.webm",
+        audio.content_type or "audio/webm",
+    )
+    if not transcript:
+        raise HTTPException(status_code=503, detail="Speech transcription failed.")
+
+    chat_response = _chat_from_text(transcript, Location(lat=lat, lng=lng))
+    return VoiceChatResponse(
+        transcript=transcript,
+        intent=chat_response.intent,
+        recommendations=chat_response.recommendations,
+    )
 
 
 @app.get("/api/orders", response_model=list[OrderResponse])
@@ -123,6 +159,14 @@ def api_update_inventory(product_id: str, request: UpdateInventoryRequest) -> di
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _chat_from_text(message: str, location: Location) -> ChatResponse:
+    intent = parse_intent(message)
+    if intent is None:
+        raise HTTPException(status_code=503, detail="Cloud LLM did not detect a coffee order.")
+    recommendations = recommend_products(intent.drink, location)
+    return ChatResponse(intent=intent, recommendations=recommendations)
+
+
 @app.get("/", response_class=HTMLResponse)
 def home() -> HTMLResponse:
     return HTMLResponse(
@@ -149,9 +193,11 @@ def home() -> HTMLResponse:
     .agent { background:var(--soft); border:1px solid #d3e7dc; align-self:flex-start; }
     .user { background:var(--accent); color:white; align-self:flex-end; }
     .error { background:#fff1f1; border:1px solid #f0b9b9; color:var(--danger); }
-    .composer { border-top:1px solid var(--line); padding:12px; display:grid; grid-template-columns:1fr 90px; gap:10px; }
+    .composer { border-top:1px solid var(--line); padding:12px; display:grid; grid-template-columns:1fr 78px 90px; gap:10px; }
     textarea, input { border:1px solid #cfc7bd; border-radius:6px; padding:10px; font:inherit; }
     button { border:0; border-radius:6px; padding:10px 12px; background:var(--accent); color:white; font-weight:700; cursor:pointer; }
+    button.secondary { background:#efe8dd; color:#20352d; border:1px solid #d8d0c7; }
+    button.recording { background:#9b1c1c; color:white; }
     .cards { display:grid; gap:10px; margin-top:10px; }
     .card, .order-card { border:1px solid #d8d0c7; border-radius:8px; background:#fffefa; padding:12px; }
     .order-card { background:#f4fbf7; border-color:#cbded5; font-size:13px; line-height:1.45; }
@@ -166,7 +212,11 @@ def home() -> HTMLResponse:
   <section class="chat">
     <div class="head"><strong>Chat</strong><a href="/merchant" target="_blank">Merchant</a></div>
     <div id="log" class="log"><div class="msg agent">Hi, tell me what coffee you want.</div></div>
-    <div class="composer"><textarea id="message" placeholder="I want a latte near me"></textarea><button id="send">Send</button></div>
+    <div class="composer">
+      <textarea id="message" placeholder="I want a latte near me"></textarea>
+      <button id="voice" class="secondary" title="Record voice">Voice</button>
+      <button id="send">Send</button>
+    </div>
   </section>
   <section class="orders">
     <div class="head"><strong>Orders</strong><button onclick="loadOrders()">Refresh</button></div>
@@ -175,9 +225,13 @@ def home() -> HTMLResponse:
 </main>
 <script>
 let latest = [];
+let recorder = null;
+let chunks = [];
+let recording = false;
 const log = document.getElementById("log");
 function add(role, html){ const n=document.createElement("div"); n.className=`msg ${role}`; n.innerHTML=html; log.appendChild(n); log.scrollTop=log.scrollHeight; return n; }
 async function api(path, options={}){ const r=await fetch(path,{headers:{"Content-Type":"application/json"},...options}); const t=await r.text(); const d=t?JSON.parse(t):{}; if(!r.ok) throw new Error(d.detail||t||r.status); return d; }
+async function apiForm(path, form){ const r=await fetch(path,{method:"POST",body:form}); const t=await r.text(); const d=t?JSON.parse(t):{}; if(!r.ok) throw new Error(d.detail||t||r.status); return d; }
 function renderRecs(data){
   latest=data.recommendations||[];
   if(!latest.length){ add("agent","No matching coffee nearby."); return; }
@@ -185,6 +239,10 @@ function renderRecs(data){
     <div class="card"><div class="top"><strong>${i+1}. ${x.shop_name}</strong><strong>$${Number(x.price).toFixed(2)}</strong></div>
     <div class="muted">${x.product_name}</div><span class="pill">${x.distance_km} km</span><span class="pill">${x.wait_minutes} min</span><span class="pill">score ${x.score}</span>
     <div><button onclick="order(${i})">Order this</button></div></div>`).join("")}</div>`);
+}
+async function sendText(message){
+  add("user",message); add("agent","Checking nearby coffee shops...");
+  try{ renderRecs(await api("/api/chat",{method:"POST",body:JSON.stringify({message})})); }catch(e){ add("error",e.message); }
 }
 async function order(i){
   const x=latest[i]; if(!x) return;
@@ -203,8 +261,41 @@ async function loadOrders(){
 }
 document.getElementById("send").onclick=async()=>{
   const m=document.getElementById("message").value.trim(); if(!m) return;
-  add("user",m); add("agent","Checking nearby coffee shops...");
-  try{ renderRecs(await api("/api/chat",{method:"POST",body:JSON.stringify({message:m})})); }catch(e){ add("error",e.message); }
+  document.getElementById("message").value="";
+  sendText(m);
+};
+document.getElementById("voice").onclick=async()=>{
+  const button = document.getElementById("voice");
+  if(recording && recorder){ recorder.stop(); return; }
+  if(!navigator.mediaDevices || !window.MediaRecorder){ add("error","Voice recording is not supported in this browser."); return; }
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    chunks = [];
+    const options = MediaRecorder.isTypeSupported("audio/webm") ? {mimeType:"audio/webm"} : {};
+    recorder = new MediaRecorder(stream, options);
+    recorder.ondataavailable = event => { if(event.data && event.data.size) chunks.push(event.data); };
+    recorder.onstop = async()=>{
+      recording = false;
+      button.textContent = "Voice";
+      button.classList.remove("recording");
+      stream.getTracks().forEach(track => track.stop());
+      const blob = new Blob(chunks, {type: recorder.mimeType || "audio/webm"});
+      const form = new FormData();
+      form.append("audio", blob, "voice.webm");
+      add("agent","Transcribing voice...");
+      try{
+        const data = await apiForm("/api/voice/chat", form);
+        add("user",`Voice: ${data.transcript}`);
+        renderRecs(data);
+      }catch(e){ add("error",e.message); }
+    };
+    recorder.start();
+    recording = true;
+    button.textContent = "Stop";
+    button.classList.add("recording");
+    add("agent","Listening...");
+    setTimeout(()=>{ if(recording && recorder) recorder.stop(); }, 15000);
+  }catch(e){ add("error","Microphone permission was not granted."); }
 };
 loadOrders();
 </script>

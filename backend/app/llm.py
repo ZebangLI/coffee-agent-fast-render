@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 import urllib.error
 import urllib.request
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 from .models import DrinkIntent
 
 DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
+DEFAULT_GROQ_TRANSCRIPTION_MODEL = "whisper-large-v3-turbo"
 
 SYSTEM_PROMPT = """
 You extract coffee ordering intent from a short user message.
@@ -66,11 +68,56 @@ def parse_intent(message: str) -> DrinkIntent | None:
         return None
 
 
+def transcribe_audio(audio: bytes, filename: str, content_type: str) -> str | None:
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return None
+
+    boundary = f"----coffee-agent-{uuid.uuid4().hex}"
+    body = _multipart_body(
+        boundary,
+        fields={
+            "model": os.environ.get("GROQ_TRANSCRIPTION_MODEL", DEFAULT_GROQ_TRANSCRIPTION_MODEL),
+            "response_format": "json",
+            "temperature": "0",
+        },
+        files={
+            "file": {
+                "filename": filename or "voice.webm",
+                "content_type": content_type or "audio/webm",
+                "content": audio,
+            }
+        },
+    )
+
+    try:
+        request = urllib.request.Request(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "User-Agent": "coffee-agent-fast-render/1.0",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(
+            request,
+            timeout=float(os.environ.get("GROQ_TRANSCRIPTION_TIMEOUT_SECONDS", "20")),
+        ) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        text = str(data.get("text") or "").strip()
+        return text or None
+    except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
 def llm_status() -> dict[str, Any]:
     return {
         "enabled": bool(os.environ.get("GROQ_API_KEY")),
         "provider": "groq",
         "model": os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL),
+        "transcription_model": os.environ.get("GROQ_TRANSCRIPTION_MODEL", DEFAULT_GROQ_TRANSCRIPTION_MODEL),
     }
 
 
@@ -101,3 +148,39 @@ def _strip_code_fence(text: str) -> str:
         if cleaned.endswith("```"):
             cleaned = cleaned[:-3].strip()
     return cleaned
+
+
+def _multipart_body(
+    boundary: str,
+    fields: dict[str, str],
+    files: dict[str, dict[str, bytes | str]],
+) -> bytes:
+    lines: list[bytes] = []
+    for name, value in fields.items():
+        lines.extend(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"),
+                f"{value}\r\n".encode("utf-8"),
+            ]
+        )
+    for name, file_info in files.items():
+        filename = str(file_info["filename"])
+        content_type = str(file_info["content_type"])
+        content = file_info["content"]
+        if not isinstance(content, bytes):
+            raise TypeError("Multipart file content must be bytes")
+        lines.extend(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                (
+                    f'Content-Disposition: form-data; name="{name}"; '
+                    f'filename="{filename}"\r\n'
+                ).encode("utf-8"),
+                f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"),
+                content,
+                b"\r\n",
+            ]
+        )
+    lines.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(lines)

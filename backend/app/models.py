@@ -34,6 +34,10 @@ class ChatResponse(BaseModel):
     recommendations: list[Recommendation]
 
 
+class VoiceChatResponse(ChatResponse):
+    transcript: str
+
+
 class CreateOrderRequest(BaseModel):
     user_id: str = "u_001"
     product_id: str

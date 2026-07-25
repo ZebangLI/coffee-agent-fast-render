@@ -380,6 +380,11 @@ function setAuthMode(mode){
 function hasPaymentIdentity(){
   return Boolean(apAccount.email && apAccount.api_key);
 }
+function renderSavedApiKey(){
+  const keyInput = document.getElementById("auth-api-key");
+  if(!keyInput) return;
+  if(apAccount.api_key && !keyInput.value) keyInput.value = apAccount.api_key;
+}
 function renderAuthState(){
   const authenticated = hasPaymentIdentity();
   document.getElementById("auth").classList.toggle("hidden", authenticated);
@@ -389,6 +394,7 @@ function renderAuthState(){
     : "<span>Register or login to buy coffee</span>";
   if(!authenticated){
     if(apAccount.email) document.getElementById("auth-email").value = apAccount.email;
+    renderSavedApiKey();
     setAuthMode(authMode);
     document.getElementById("orders").innerHTML="<span class='muted'>Sign in to see orders.</span>";
   }else{
@@ -416,7 +422,7 @@ async function submitAuth(){
       apAccount={email:data.email,api_key:data.api_key};
       localStorage.setItem("coffeeAgentApAccount", JSON.stringify(apAccount));
       renderAuthState();
-      add("agent","AigenticPay registration is ready. You can ask for coffee now.");
+      add("agent",`AigenticPay registration is ready. Buyer API key saved in this browser.<br><code>${data.api_key}</code>`);
       return;
     }
     const data=await api("/api/aigenticpay/login",{method:"POST",body:JSON.stringify({email,password})});

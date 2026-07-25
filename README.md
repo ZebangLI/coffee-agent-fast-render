@@ -9,7 +9,8 @@
 - Groq LLM 负责从用户话里提取咖啡意图。
 - 如果已经有推荐列表，用户可以打字或语音说 `second one`，LLM 会识别为选择第二个选项并直接下单。
 - 后端根据位置、等待时间、价格和库存推荐三家咖啡店。
-- 用户确认后创建订单，并扣减库存。
+- 用户确认后先调用 AigenticPay `a2a_verify` 做风控校验，成功后创建订单并扣减库存。
+- 如果 AigenticPay 因余额、每日限额、类别限制、白名单等规则拒绝交易，页面会直接提示拒绝原因，不扣库存。
 - 商家后台可以按店铺查看商品、库存和订单。
 - 数据库使用一个 Neon/Postgres 数据库，核心表是 `shops`、`products`、`orders`。
 
@@ -44,13 +45,21 @@ GROQ_MODEL=llama-3.1-8b-instant
 GROQ_TRANSCRIPTION_MODEL=whisper-large-v3-turbo
 GROQ_TRANSCRIPTION_LANGUAGE=en
 MAX_VOICE_UPLOAD_BYTES=10485760
-AIGENTIC_PAY_ENABLED=0
+AIGENTIC_PAY_ENABLED=1
+AIGENTIC_PAY_API_MODE=a2a_verify
 AIGENTIC_PAY_BASE_URL=https://aigenticpay.onrender.com
 AIGENTIC_PAY_API_KEY=<AigenticPay API key>
 AIGENTIC_PAY_USER_EMAIL=lizebang2017@icloud.com
-AIGENTIC_PAY_USE_VIRTUAL_CARD=0
-AIGENTIC_PAY_REQUIRE_ONCHAIN=0
 ```
+
+Coffee shop demo uses:
+
+```text
+merchant_id=00001
+mcc_code=5814
+```
+
+The PDF API requires `merchant_id` for AigenticPay rule checking. `mcc_code` is stored in our database for merchant/category context; the actual rule decision is made by AigenticPay inside `/api/a2a_verify`.
 
 ## Pages
 

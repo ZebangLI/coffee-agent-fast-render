@@ -61,10 +61,14 @@ def init_db() -> None:
                 address TEXT NOT NULL,
                 lat REAL NOT NULL,
                 lng REAL NOT NULL,
+                merchant_id TEXT NOT NULL DEFAULT '00001',
+                mcc_code TEXT NOT NULL DEFAULT '5814',
                 wait_minutes INTEGER NOT NULL
             )
             """
         )
+        _ensure_column(conn, "shops", "merchant_id", "TEXT NOT NULL DEFAULT '00001'")
+        _ensure_column(conn, "shops", "mcc_code", "TEXT NOT NULL DEFAULT '5814'")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS products (
@@ -92,6 +96,7 @@ def init_db() -> None:
                 tx_hash TEXT NOT NULL,
                 explorer_url TEXT,
                 virtual_card_last4 TEXT,
+                approval_id TEXT,
                 idempotency_key TEXT NOT NULL UNIQUE,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (shop_id) REFERENCES shops(id),
@@ -99,16 +104,17 @@ def init_db() -> None:
             )
             """
         )
+        _ensure_column(conn, "orders", "approval_id", "TEXT")
         conn.executemany(
             _upsert_sql(
                 "shops",
-                ("id", "name", "provider", "address", "lat", "lng", "wait_minutes"),
-                ("name", "provider", "address", "lat", "lng", "wait_minutes"),
+                ("id", "name", "provider", "address", "lat", "lng", "merchant_id", "mcc_code", "wait_minutes"),
+                ("name", "provider", "address", "lat", "lng", "merchant_id", "mcc_code", "wait_minutes"),
             ),
             [
-                ("starbucks_001", "Starbucks Broadway", "starbucks", "Broadway, New York, NY", 40.7301, -73.9912, 8),
-                ("local_cafe_001", "Local Cafe Washington Square", "local_cafe", "Washington Square, New York, NY", 40.7308, -73.9973, 10),
-                ("campus_cafe_001", "Campus Cafe NYU", "campus_cafe", "NYU Campus, New York, NY", 40.7295, -73.9965, 6),
+                ("starbucks_001", "Starbucks Broadway", "starbucks", "Broadway, New York, NY", 40.7301, -73.9912, "00001", "5814", 8),
+                ("local_cafe_001", "Local Cafe Washington Square", "local_cafe", "Washington Square, New York, NY", 40.7308, -73.9973, "00001", "5814", 10),
+                ("campus_cafe_001", "Campus Cafe NYU", "campus_cafe", "NYU Campus, New York, NY", 40.7295, -73.9965, "00001", "5814", 6),
             ],
         )
         conn.executemany(
@@ -175,7 +181,7 @@ def list_orders(limit: int = 20) -> list[OrderResponse]:
         rows = conn.execute(
             """
             SELECT id, user_id, shop_id, product_id, quantity, status, total,
-                   payment_status, tx_hash, explorer_url, virtual_card_last4
+                   payment_status, tx_hash, explorer_url, virtual_card_last4, approval_id
             FROM orders
             ORDER BY created_at DESC
             LIMIT ?
@@ -235,8 +241,8 @@ def insert_order(order: OrderResponse, user_id: str, idempotency_key: str) -> No
             """
             INSERT INTO orders
                 (id, user_id, shop_id, product_id, quantity, status, total,
-                 payment_status, tx_hash, explorer_url, virtual_card_last4, idempotency_key)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 payment_status, tx_hash, explorer_url, virtual_card_last4, approval_id, idempotency_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 order.order_id,
@@ -250,6 +256,7 @@ def insert_order(order: OrderResponse, user_id: str, idempotency_key: str) -> No
                 order.tx_hash,
                 order.explorer_url,
                 order.virtual_card_last4,
+                order.approval_id,
                 idempotency_key,
             ),
         )
@@ -264,7 +271,7 @@ def get_order_by_idempotency_key(idempotency_key: str) -> OrderResponse | None:
         row = conn.execute(
             """
             SELECT id, user_id, shop_id, product_id, quantity, status, total,
-                   payment_status, tx_hash, explorer_url, virtual_card_last4
+                   payment_status, tx_hash, explorer_url, virtual_card_last4, approval_id
             FROM orders
             WHERE idempotency_key = ?
             """,
@@ -278,6 +285,7 @@ def get_product_for_order(product_id: str) -> dict:
         row = conn.execute(
             """
             SELECT products.*, shops.name AS shop_name
+            , shops.merchant_id AS merchant_id, shops.mcc_code AS mcc_code
             FROM products
             JOIN shops ON shops.id = products.shop_id
             WHERE products.id = ?
@@ -301,6 +309,7 @@ def _order_from_row(row: Any) -> OrderResponse:
         tx_hash=row["tx_hash"],
         explorer_url=row["explorer_url"],
         virtual_card_last4=row["virtual_card_last4"],
+        approval_id=row["approval_id"],
     )
 
 
@@ -331,3 +340,10 @@ def _upsert_sql(
         f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders}) "
         f"ON CONFLICT ({conflict_sql}) DO UPDATE SET {update_sql}"
     )
+
+
+def _ensure_column(conn: sqlite3.Connection | PostgresConnection, table: str, column: str, definition: str) -> None:
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except Exception:
+        pass

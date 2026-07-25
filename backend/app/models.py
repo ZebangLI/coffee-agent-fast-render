@@ -56,6 +56,8 @@ class CreateOrderRequest(BaseModel):
     product_id: str
     quantity: int = Field(default=1, ge=1, le=10)
     idempotency_key: str = Field(min_length=8)
+    buyer_email: str | None = None
+    buyer_api_key: str | None = None
 
 
 class OrderResponse(BaseModel):
@@ -69,7 +71,29 @@ class OrderResponse(BaseModel):
     tx_hash: str
     explorer_url: str | None = None
     virtual_card_last4: str | None = None
+    approval_id: str | None = None
 
 
 class UpdateInventoryRequest(BaseModel):
     inventory: int = Field(ge=0, le=10000)
+
+
+class AigenticRegisterRequest(BaseModel):
+    email: str
+    password: str
+    address: str = "New York, NY"
+
+
+class AigenticRegisterResponse(BaseModel):
+    email: str
+    api_key: str
+
+
+class AigenticLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AigenticLoginResponse(BaseModel):
+    email: str
+    ok: bool

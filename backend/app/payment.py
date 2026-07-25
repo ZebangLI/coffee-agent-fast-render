@@ -53,7 +53,7 @@ def ext_register(email: str, password: str, address: str) -> dict[str, Any]:
         raise ValueError(f"AigenticPay register is unavailable: {exc}") from exc
 
 
-def ext_login(email: str, password: str) -> bool:
+def ext_login(email: str, password: str) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{_base_url()}/api/ext_login",
         data=json.dumps({"email": email, "password": password}).encode("utf-8"),
@@ -64,13 +64,22 @@ def ext_login(email: str, password: str) -> bool:
         with urllib.request.urlopen(request, timeout=float(os.environ.get("AIGENTIC_PAY_TIMEOUT_SECONDS", "30"))) as response:
             body = response.read().decode("utf-8").strip()
         if body.lower() in {"true", "1"}:
-            return True
+            return {"ok": True}
+        if body.lower() in {"false", "0"}:
+            return {"ok": False}
         parsed = json.loads(body)
-        return bool(parsed)
+        if isinstance(parsed, bool):
+            return {"ok": parsed}
+        if not isinstance(parsed, dict):
+            return {"ok": bool(parsed)}
+
+        api_key = parsed.get("api_key") or parsed.get("buyer_api_key") or parsed.get("key")
+        ok = bool(parsed.get("ok") or parsed.get("success") or parsed.get("authenticated") or api_key)
+        return {"ok": ok, "api_key": api_key, "raw": parsed}
     except urllib.error.HTTPError:
-        return False
+        return {"ok": False}
     except (OSError, TimeoutError, json.JSONDecodeError):
-        return False
+        return {"ok": False}
 
 
 def verify_a2a_payment(payload: dict[str, Any]) -> dict[str, Any]:

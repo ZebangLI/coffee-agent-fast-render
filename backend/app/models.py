@@ -97,3 +97,4 @@ class AigenticLoginRequest(BaseModel):
 class AigenticLoginResponse(BaseModel):
     email: str
     ok: bool
+    api_key: str | None = None

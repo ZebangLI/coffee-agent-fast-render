@@ -70,7 +70,13 @@ def aigenticpay_register(request: AigenticRegisterRequest) -> AigenticRegisterRe
 
 @app.post("/api/aigenticpay/login", response_model=AigenticLoginResponse)
 def aigenticpay_login(request: AigenticLoginRequest) -> AigenticLoginResponse:
-    return AigenticLoginResponse(email=request.email, ok=ext_login(request.email, request.password))
+    result = ext_login(request.email, request.password)
+    if not result.get("ok"):
+        return AigenticLoginResponse(email=request.email, ok=False)
+    api_key = result.get("api_key")
+    if not api_key:
+        raise HTTPException(status_code=502, detail="AigenticPay login did not return an api_key.")
+    return AigenticLoginResponse(email=request.email, ok=True, api_key=str(api_key))
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -282,7 +288,7 @@ def home() -> HTMLResponse:
 <section id="auth" class="auth-view">
   <div class="auth-card">
     <h2>AigenticPay Account</h2>
-    <p class="auth-note">Register creates a buyer API key through AigenticPay. Login only verifies email/password because the current AigenticPay login API returns true/false.</p>
+    <p class="auth-note">Register or login through AigenticPay. The buyer API key is saved locally after a successful response.</p>
     <div class="auth-tabs">
       <button id="tab-register" class="active" onclick="setAuthMode('register')">Register</button>
       <button id="tab-login" onclick="setAuthMode('login')">Login</button>
@@ -291,7 +297,7 @@ def home() -> HTMLResponse:
       <input id="auth-email" placeholder="Email">
       <input id="auth-password" type="password" placeholder="Password">
       <input id="auth-address" placeholder="Address" value="New York, NY">
-      <input id="auth-api-key" class="hidden" placeholder="Saved buyer API key, optional for login">
+      <input id="auth-api-key" class="hidden" placeholder="Buyer API key">
       <button id="auth-submit" onclick="submitAuth()">Register and get API key</button>
       <div id="auth-status" class="auth-status"></div>
     </div>
@@ -371,11 +377,11 @@ function setAuthMode(mode){
   document.getElementById("tab-register").classList.toggle("active", mode === "register");
   document.getElementById("tab-login").classList.toggle("active", mode === "login");
   document.getElementById("auth-address").classList.toggle("hidden", mode !== "register");
-  document.getElementById("auth-api-key").classList.toggle("hidden", mode !== "login");
+  document.getElementById("auth-api-key").classList.add("hidden");
   document.getElementById("auth-submit").textContent = mode === "register" ? "Register and get API key" : "Login";
   document.getElementById("auth-status").textContent = mode === "register"
     ? "AigenticPay will return a buyer API key after registration."
-    : "Login verifies the account. Paste a saved buyer API key if you already have one.";
+    : "AigenticPay login will return and save the buyer API key.";
 }
 function hasPaymentIdentity(){
   return Boolean(apAccount.email && apAccount.api_key);
@@ -406,7 +412,6 @@ async function submitAuth(){
   const email=document.getElementById("auth-email").value.trim();
   const password=document.getElementById("auth-password").value;
   const address=document.getElementById("auth-address").value.trim() || "New York, NY";
-  const savedKey=document.getElementById("auth-api-key").value.trim();
   const status=document.getElementById("auth-status");
   if(!email || !password){ status.textContent="Email and password are required."; return; }
   status.textContent = authMode === "register" ? "Registering with AigenticPay..." : "Checking login with AigenticPay...";
@@ -421,11 +426,11 @@ async function submitAuth(){
     }
     const data=await api("/api/aigenticpay/login",{method:"POST",body:JSON.stringify({email,password})});
     if(!data.ok){ status.textContent="Login failed."; return; }
-    if(!savedKey){
-      status.textContent="Login verified, but AigenticPay login does not return an API key. Paste your saved buyer API key or register once.";
+    if(!data.api_key){
+      status.textContent="Login verified, but AigenticPay did not return a buyer API key.";
       return;
     }
-    apAccount={email:data.email,api_key:savedKey};
+    apAccount={email:data.email,api_key:data.api_key};
     localStorage.setItem("coffeeAgentApAccount", JSON.stringify(apAccount));
     renderAuthState();
     add("agent","AigenticPay login is ready. You can ask for coffee now.");

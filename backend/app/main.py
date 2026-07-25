@@ -118,8 +118,8 @@ async def voice_chat(
 
 
 @app.get("/api/orders", response_model=list[OrderResponse])
-def api_list_orders() -> list[OrderResponse]:
-    return list_orders()
+def api_list_orders(user_id: str | None = None) -> list[OrderResponse]:
+    return list_orders(user_id=user_id)
 
 
 @app.post("/api/orders", response_model=OrderResponse)
@@ -321,9 +321,32 @@ let apAccount = JSON.parse(localStorage.getItem("coffeeAgentApAccount") || "{}")
 let authMode = "register";
 const log = document.getElementById("log");
 function add(role, html){ const n=document.createElement("div"); n.className=`msg ${role}`; n.innerHTML=html; log.appendChild(n); log.scrollTop=log.scrollHeight; return n; }
-async function api(path, options={}){ const r=await fetch(path,{headers:{"Content-Type":"application/json"},...options}); const t=await r.text(); const d=t?JSON.parse(t):{}; if(!r.ok) throw new Error(d.detail||t||r.status); return d; }
+function apiErrorMessage(payload, text, status){
+  const detail = payload && payload.detail;
+  if(detail && typeof detail === "object") return detail.message || JSON.stringify(detail);
+  return detail || text || `Request failed: ${status}`;
+}
+async function fetchWithTimeout(path, options={}, timeoutMs=45000){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try{
+    return await fetch(path, {...options, signal: controller.signal});
+  }catch(e){
+    if(e.name === "AbortError") throw new Error("Request timed out. The cloud LLM or AigenticPay API is responding slowly.");
+    throw e;
+  }finally{
+    clearTimeout(timer);
+  }
+}
+async function api(path, options={}){
+  const r=await fetchWithTimeout(path,{headers:{"Content-Type":"application/json"},...options});
+  const t=await r.text();
+  const d=t?JSON.parse(t):{};
+  if(!r.ok) throw new Error(apiErrorMessage(d,t,r.status));
+  return d;
+}
 async function apiForm(path, form){
-  const r=await fetch(path,{method:"POST",body:form});
+  const r=await fetchWithTimeout(path,{method:"POST",body:form},60000);
   const t=await r.text();
   const d=t?JSON.parse(t):{};
   if(!r.ok){
@@ -367,11 +390,16 @@ function renderAuthState(){
   if(!authenticated){
     if(apAccount.email) document.getElementById("auth-email").value = apAccount.email;
     setAuthMode(authMode);
+    document.getElementById("orders").innerHTML="<span class='muted'>Sign in to see orders.</span>";
+  }else{
+    loadOrders();
   }
 }
 function signOut(){
   apAccount = {};
   localStorage.removeItem("coffeeAgentApAccount");
+  latest = [];
+  document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove());
   renderAuthState();
 }
 async function submitAuth(){
@@ -423,14 +451,19 @@ async function order(i){
   add("agent",`Creating order at <strong>${x.shop_name}</strong>...`);
   try{
     if(!hasPaymentIdentity()){ add("error","Please register or login with an AigenticPay buyer API key first."); renderAuthState(); return; }
-    const o=await api("/api/orders",{method:"POST",body:JSON.stringify({product_id:x.product_id,quantity:1,idempotency_key:`u_001-${x.product_id}-${Date.now()}`,buyer_email:apAccount.email,buyer_api_key:apAccount.api_key})});
+    const owner = apAccount.email || "u_001";
+    const o=await api("/api/orders",{method:"POST",body:JSON.stringify({user_id:owner,product_id:x.product_id,quantity:1,idempotency_key:`${owner}-${x.product_id}-${Date.now()}`,buyer_email:apAccount.email,buyer_api_key:apAccount.api_key})});
     add("agent",`Order confirmed: <strong>${o.order_id}</strong><br>Total $${Number(o.total).toFixed(2)}<br>Payment ${o.payment_status}<br>Approval ${o.approval_id||"-"}<br>Tx ${o.tx_hash}${o.explorer_url?`<br><a target="_blank" href="${o.explorer_url}">Explorer</a>`:""}`);
     latest=[]; document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove()); loadOrders();
   }catch(e){ add("error",e.message); }
 }
 async function loadOrders(){
   try{
-    const rows=await api("/api/orders");
+    if(!hasPaymentIdentity()){
+      document.getElementById("orders").innerHTML="<span class='muted'>Sign in to see orders.</span>";
+      return;
+    }
+    const rows=await api(`/api/orders?user_id=${encodeURIComponent(apAccount.email)}`);
     document.getElementById("orders").innerHTML=rows.map(o=>`<div class="order-card"><strong>${o.status}</strong><br>${o.order_id}<br>${o.shop_id}<br>$${Number(o.total).toFixed(2)}<br>${o.payment_status}<br>Approval ${o.approval_id||"-"}<br>${o.tx_hash}</div>`).join("") || "<span class='muted'>No orders yet.</span>";
   }catch(e){ document.getElementById("orders").innerHTML=e.message; }
 }
@@ -474,7 +507,6 @@ document.getElementById("voice").onclick=async()=>{
     setTimeout(()=>{ if(recording && recorder) recorder.stop(); }, 15000);
   }catch(e){ add("error","Microphone permission was not granted."); }
 };
-loadOrders();
 renderAuthState();
 </script>
 </body>

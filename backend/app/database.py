@@ -176,18 +176,31 @@ def recommend_products(drink: str, location: Location) -> list[Recommendation]:
     return sorted(recommendations, key=lambda item: item.score, reverse=True)
 
 
-def list_orders(limit: int = 20) -> list[OrderResponse]:
+def list_orders(limit: int = 20, user_id: str | None = None) -> list[OrderResponse]:
     with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, user_id, shop_id, product_id, quantity, status, total,
-                   payment_status, tx_hash, explorer_url, virtual_card_last4, approval_id
-            FROM orders
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        if user_id:
+            rows = conn.execute(
+                """
+                SELECT id, user_id, shop_id, product_id, quantity, status, total,
+                       payment_status, tx_hash, explorer_url, virtual_card_last4, approval_id
+                FROM orders
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, user_id, shop_id, product_id, quantity, status, total,
+                       payment_status, tx_hash, explorer_url, virtual_card_last4, approval_id
+                FROM orders
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
     return [_order_from_row(row) for row in rows]
 
 
@@ -343,6 +356,10 @@ def _upsert_sql(
 
 
 def _ensure_column(conn: sqlite3.Connection | PostgresConnection, table: str, column: str, definition: str) -> None:
+    if using_postgres():
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}")
+        return
+
     try:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
     except Exception:

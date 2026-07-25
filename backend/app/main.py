@@ -327,6 +327,12 @@ let apAccount = JSON.parse(localStorage.getItem("coffeeAgentApAccount") || "{}")
 let authMode = "register";
 const log = document.getElementById("log");
 function add(role, html){ const n=document.createElement("div"); n.className=`msg ${role}`; n.innerHTML=html; log.appendChild(n); log.scrollTop=log.scrollHeight; return n; }
+function clearAuthInputs(){
+  document.getElementById("auth-email").value = "";
+  document.getElementById("auth-password").value = "";
+  document.getElementById("auth-address").value = "New York, NY";
+  document.getElementById("auth-api-key").value = "";
+}
 function apiErrorMessage(payload, text, status){
   const detail = payload && payload.detail;
   if(detail && typeof detail === "object") return detail.message || JSON.stringify(detail);
@@ -394,7 +400,6 @@ function renderAuthState(){
     ? `<span>AigenticPay: ${apAccount.email}</span><button class="link-button" onclick="signOut()">Sign out</button>`
     : "<span>Register or login to buy coffee</span>";
   if(!authenticated){
-    if(apAccount.email) document.getElementById("auth-email").value = apAccount.email;
     setAuthMode(authMode);
     document.getElementById("orders").innerHTML="<span class='muted'>Sign in to see orders.</span>";
   }else{
@@ -404,6 +409,7 @@ function renderAuthState(){
 function signOut(){
   apAccount = {};
   localStorage.removeItem("coffeeAgentApAccount");
+  clearAuthInputs();
   latest = [];
   document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove());
   renderAuthState();
@@ -420,6 +426,7 @@ async function submitAuth(){
       const data=await api("/api/aigenticpay/register",{method:"POST",body:JSON.stringify({email,password,address})});
       apAccount={email:data.email,api_key:data.api_key};
       localStorage.setItem("coffeeAgentApAccount", JSON.stringify(apAccount));
+      clearAuthInputs();
       renderAuthState();
       add("agent","AigenticPay registration is ready. You can ask for coffee now.");
       return;
@@ -432,6 +439,7 @@ async function submitAuth(){
     }
     apAccount={email:data.email,api_key:data.api_key};
     localStorage.setItem("coffeeAgentApAccount", JSON.stringify(apAccount));
+    clearAuthInputs();
     renderAuthState();
     add("agent","AigenticPay login is ready. You can ask for coffee now.");
   }catch(e){ status.textContent=e.message; }

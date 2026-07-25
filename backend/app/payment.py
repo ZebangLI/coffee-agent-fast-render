@@ -111,8 +111,15 @@ def verify_a2a_payment(payload: dict[str, Any]) -> dict[str, Any]:
 
     status = str(body.get("status") or body.get("payment_status") or "").lower()
     approved = body.get("approved")
-    if approved is False or status in {"failed", "rejected", "declined", "denied"}:
-        reason = body.get("failed_reason") or body.get("reason") or json.dumps(body, ensure_ascii=False)
+    approved_statuses = {"success", "approved", "a2a_approved", "verified", "completed", "ok"}
+    rejected_statuses = {"error", "failed", "rejected", "declined", "denied"}
+    if approved is False or status in rejected_statuses or (status and status not in approved_statuses):
+        reason = (
+            body.get("failed_reason")
+            or body.get("reason")
+            or body.get("message")
+            or json.dumps(body, ensure_ascii=False)
+        )
         raise ValueError(f"AigenticPay rejected the order: {reason}")
 
     tx_hash = (

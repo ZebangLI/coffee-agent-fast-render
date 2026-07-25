@@ -243,10 +243,20 @@ def home() -> HTMLResponse:
     header { background:#20352d; color:white; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; }
     header h1 { margin:0; font-size:20px; }
     main { height:calc(100vh - 54px); max-width:1180px; margin:0 auto; padding:18px; display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:16px; }
+    .hidden { display:none !important; }
+    .auth-view { height:calc(100vh - 54px); display:grid; place-items:center; padding:24px; }
+    .auth-card { width:min(480px, 100%); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:22px; display:grid; gap:14px; }
+    .auth-card h2 { margin:0; font-size:24px; }
+    .auth-tabs { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .auth-tabs button { background:#efe8dd; color:#20352d; border:1px solid #d8d0c7; }
+    .auth-tabs button.active { background:var(--accent); color:white; border-color:var(--accent); }
+    .auth-form { display:grid; gap:10px; }
+    .auth-note { color:var(--muted); font-size:13px; line-height:1.45; }
+    .auth-status { color:var(--muted); font-size:13px; min-height:18px; }
     section { min-height:0; background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
     .head { padding:13px 16px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
     .chat, .orders { display:grid; grid-template-rows:auto 1fr auto; }
-    .orders { grid-template-rows:auto auto 1fr; }
+    .orders { grid-template-rows:auto 1fr; }
     .log, .orders-list { overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; }
     .msg { max-width:82%; padding:12px 14px; border-radius:8px; line-height:1.45; }
     .agent { background:var(--soft); border:1px solid #d3e7dc; align-self:flex-start; }
@@ -263,17 +273,33 @@ def home() -> HTMLResponse:
     .top { display:flex; justify-content:space-between; gap:10px; }
     .muted { color:var(--muted); font-size:13px; }
     .pill { display:inline-block; margin:8px 6px 0 0; padding:4px 7px; border:1px solid #d9d0c6; border-radius:999px; font-size:12px; }
-    .account { padding:12px 16px; border-bottom:1px solid var(--line); display:grid; gap:8px; }
-    .account input { width:100%; }
-    .account-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-    .account-status { color:var(--muted); font-size:12px; line-height:1.35; }
+    .account-chip { color:#dfeee8; font-size:13px; display:flex; gap:10px; align-items:center; }
+    .link-button { background:transparent; color:white; border:1px solid rgba(255,255,255,.45); padding:6px 8px; font-size:12px; }
   </style>
 </head>
 <body>
-<header><h1>Coffee Agent</h1><span>Groq LLM -> Fast MCP Hub -> Order</span></header>
-<main>
+<header><h1>Coffee Agent</h1><span id="account-chip" class="account-chip"></span></header>
+<section id="auth" class="auth-view">
+  <div class="auth-card">
+    <h2>AigenticPay Account</h2>
+    <p class="auth-note">Register creates a buyer API key through AigenticPay. Login only verifies email/password because the current AigenticPay login API returns true/false.</p>
+    <div class="auth-tabs">
+      <button id="tab-register" class="active" onclick="setAuthMode('register')">Register</button>
+      <button id="tab-login" onclick="setAuthMode('login')">Login</button>
+    </div>
+    <div class="auth-form">
+      <input id="auth-email" placeholder="Email">
+      <input id="auth-password" type="password" placeholder="Password">
+      <input id="auth-address" placeholder="Address" value="New York, NY">
+      <input id="auth-api-key" class="hidden" placeholder="Saved buyer API key, optional for login">
+      <button id="auth-submit" onclick="submitAuth()">Register and get API key</button>
+      <div id="auth-status" class="auth-status"></div>
+    </div>
+  </div>
+</section>
+<main id="app" class="hidden">
   <section class="chat">
-    <div class="head"><strong>Chat</strong><a href="/merchant" target="_blank">Merchant</a></div>
+    <div class="head"><strong>Chat</strong><span></span></div>
     <div id="log" class="log"><div class="msg agent">Hi, tell me what coffee you want.</div></div>
     <div class="composer">
       <textarea id="message" placeholder="I want a latte near me"></textarea>
@@ -283,16 +309,6 @@ def home() -> HTMLResponse:
   </section>
   <section class="orders">
     <div class="head"><strong>Orders</strong><button onclick="loadOrders()">Refresh</button></div>
-    <div class="account">
-      <input id="ap-email" placeholder="AigenticPay email">
-      <input id="ap-password" type="password" placeholder="Password">
-      <input id="ap-address" placeholder="Address" value="New York, NY">
-      <div class="account-actions">
-        <button class="secondary" onclick="apRegister()">Register</button>
-        <button class="secondary" onclick="apLogin()">Login</button>
-      </div>
-      <div id="ap-status" class="account-status">AigenticPay account optional for mock mode.</div>
-    </div>
     <div id="orders" class="orders-list"></div>
   </section>
 </main>
@@ -302,6 +318,7 @@ let recorder = null;
 let chunks = [];
 let recording = false;
 let apAccount = JSON.parse(localStorage.getItem("coffeeAgentApAccount") || "{}");
+let authMode = "register";
 const log = document.getElementById("log");
 function add(role, html){ const n=document.createElement("div"); n.className=`msg ${role}`; n.innerHTML=html; log.appendChild(n); log.scrollTop=log.scrollHeight; return n; }
 async function api(path, options={}){ const r=await fetch(path,{headers:{"Content-Type":"application/json"},...options}); const t=await r.text(); const d=t?JSON.parse(t):{}; if(!r.ok) throw new Error(d.detail||t||r.status); return d; }
@@ -326,6 +343,66 @@ function renderRecs(data){
     <div class="muted">${x.product_name}</div><span class="pill">${x.distance_km} km</span><span class="pill">${x.wait_minutes} min</span><span class="pill">score ${x.score}</span>
     <div><button onclick="order(${i})">Order this</button></div></div>`).join("")}</div>`);
 }
+function setAuthMode(mode){
+  authMode = mode;
+  document.getElementById("tab-register").classList.toggle("active", mode === "register");
+  document.getElementById("tab-login").classList.toggle("active", mode === "login");
+  document.getElementById("auth-address").classList.toggle("hidden", mode !== "register");
+  document.getElementById("auth-api-key").classList.toggle("hidden", mode !== "login");
+  document.getElementById("auth-submit").textContent = mode === "register" ? "Register and get API key" : "Login";
+  document.getElementById("auth-status").textContent = mode === "register"
+    ? "AigenticPay will return a buyer API key after registration."
+    : "Login verifies the account. Paste a saved buyer API key if you already have one.";
+}
+function hasPaymentIdentity(){
+  return Boolean(apAccount.email && apAccount.api_key);
+}
+function renderAuthState(){
+  const authenticated = hasPaymentIdentity();
+  document.getElementById("auth").classList.toggle("hidden", authenticated);
+  document.getElementById("app").classList.toggle("hidden", !authenticated);
+  document.getElementById("account-chip").innerHTML = authenticated
+    ? `<span>AigenticPay: ${apAccount.email}</span><button class="link-button" onclick="signOut()">Sign out</button>`
+    : "<span>Register or login to buy coffee</span>";
+  if(!authenticated){
+    if(apAccount.email) document.getElementById("auth-email").value = apAccount.email;
+    setAuthMode(authMode);
+  }
+}
+function signOut(){
+  apAccount = {};
+  localStorage.removeItem("coffeeAgentApAccount");
+  renderAuthState();
+}
+async function submitAuth(){
+  const email=document.getElementById("auth-email").value.trim();
+  const password=document.getElementById("auth-password").value;
+  const address=document.getElementById("auth-address").value.trim() || "New York, NY";
+  const savedKey=document.getElementById("auth-api-key").value.trim();
+  const status=document.getElementById("auth-status");
+  if(!email || !password){ status.textContent="Email and password are required."; return; }
+  status.textContent = authMode === "register" ? "Registering with AigenticPay..." : "Checking login with AigenticPay...";
+  try{
+    if(authMode === "register"){
+      const data=await api("/api/aigenticpay/register",{method:"POST",body:JSON.stringify({email,password,address})});
+      apAccount={email:data.email,api_key:data.api_key};
+      localStorage.setItem("coffeeAgentApAccount", JSON.stringify(apAccount));
+      renderAuthState();
+      add("agent","AigenticPay registration is ready. You can ask for coffee now.");
+      return;
+    }
+    const data=await api("/api/aigenticpay/login",{method:"POST",body:JSON.stringify({email,password})});
+    if(!data.ok){ status.textContent="Login failed."; return; }
+    if(!savedKey){
+      status.textContent="Login verified, but AigenticPay login does not return an API key. Paste your saved buyer API key or register once.";
+      return;
+    }
+    apAccount={email:data.email,api_key:savedKey};
+    localStorage.setItem("coffeeAgentApAccount", JSON.stringify(apAccount));
+    renderAuthState();
+    add("agent","AigenticPay login is ready. You can ask for coffee now.");
+  }catch(e){ status.textContent=e.message; }
+}
 async function handleUserMessage(message, label){
   add("user", label || message);
   if(latest.length){
@@ -345,7 +422,8 @@ async function order(i){
   const x=latest[i]; if(!x) return;
   add("agent",`Creating order at <strong>${x.shop_name}</strong>...`);
   try{
-    const o=await api("/api/orders",{method:"POST",body:JSON.stringify({product_id:x.product_id,quantity:1,idempotency_key:`u_001-${x.product_id}-${Date.now()}`,buyer_email:apAccount.email||null,buyer_api_key:apAccount.api_key||null})});
+    if(!hasPaymentIdentity()){ add("error","Please register or login with an AigenticPay buyer API key first."); renderAuthState(); return; }
+    const o=await api("/api/orders",{method:"POST",body:JSON.stringify({product_id:x.product_id,quantity:1,idempotency_key:`u_001-${x.product_id}-${Date.now()}`,buyer_email:apAccount.email,buyer_api_key:apAccount.api_key})});
     add("agent",`Order confirmed: <strong>${o.order_id}</strong><br>Total $${Number(o.total).toFixed(2)}<br>Payment ${o.payment_status}<br>Approval ${o.approval_id||"-"}<br>Tx ${o.tx_hash}${o.explorer_url?`<br><a target="_blank" href="${o.explorer_url}">Explorer</a>`:""}`);
     latest=[]; document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove()); loadOrders();
   }catch(e){ add("error",e.message); }
@@ -355,36 +433,6 @@ async function loadOrders(){
     const rows=await api("/api/orders");
     document.getElementById("orders").innerHTML=rows.map(o=>`<div class="order-card"><strong>${o.status}</strong><br>${o.order_id}<br>${o.shop_id}<br>$${Number(o.total).toFixed(2)}<br>${o.payment_status}<br>Approval ${o.approval_id||"-"}<br>${o.tx_hash}</div>`).join("") || "<span class='muted'>No orders yet.</span>";
   }catch(e){ document.getElementById("orders").innerHTML=e.message; }
-}
-function renderApAccount(){
-  if(apAccount.email) document.getElementById("ap-email").value = apAccount.email;
-  document.getElementById("ap-status").textContent = apAccount.api_key
-    ? `AigenticPay ready: ${apAccount.email}`
-    : (apAccount.email ? `Login verified: ${apAccount.email}. Register once to store API key for a2a_verify.` : "AigenticPay account optional for mock mode.");
-}
-async function apRegister(){
-  const email=document.getElementById("ap-email").value.trim();
-  const password=document.getElementById("ap-password").value;
-  const address=document.getElementById("ap-address").value.trim() || "New York, NY";
-  if(!email || !password){ document.getElementById("ap-status").textContent="Email and password are required."; return; }
-  try{
-    const data=await api("/api/aigenticpay/register",{method:"POST",body:JSON.stringify({email,password,address})});
-    apAccount={email:data.email,api_key:data.api_key};
-    localStorage.setItem("coffeeAgentApAccount", JSON.stringify(apAccount));
-    renderApAccount();
-  }catch(e){ document.getElementById("ap-status").textContent=e.message; }
-}
-async function apLogin(){
-  const email=document.getElementById("ap-email").value.trim();
-  const password=document.getElementById("ap-password").value;
-  if(!email || !password){ document.getElementById("ap-status").textContent="Email and password are required."; return; }
-  try{
-    const data=await api("/api/aigenticpay/login",{method:"POST",body:JSON.stringify({email,password})});
-    if(!data.ok){ document.getElementById("ap-status").textContent="Login failed."; return; }
-    apAccount={...apAccount,email:data.email};
-    localStorage.setItem("coffeeAgentApAccount", JSON.stringify(apAccount));
-    renderApAccount();
-  }catch(e){ document.getElementById("ap-status").textContent=e.message; }
 }
 document.getElementById("send").onclick=async()=>{
   const m=document.getElementById("message").value.trim(); if(!m) return;
@@ -427,7 +475,7 @@ document.getElementById("voice").onclick=async()=>{
   }catch(e){ add("error","Microphone permission was not granted."); }
 };
 loadOrders();
-renderApAccount();
+renderAuthState();
 </script>
 </body>
 </html>
@@ -437,6 +485,9 @@ renderApAccount();
 
 @app.get("/merchant", response_class=HTMLResponse)
 def merchant() -> HTMLResponse:
+    if os.environ.get("ENABLE_MERCHANT_CONSOLE", "0") != "1":
+        raise HTTPException(status_code=404, detail="Not found")
+
     shops = list_shops()
     buttons = "".join(
         f"<button onclick=\"selectShop('{escape(shop['id'])}')\">{escape(shop['name'])}</button>"

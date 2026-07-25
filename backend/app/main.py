@@ -320,6 +320,7 @@ def home() -> HTMLResponse:
 </main>
 <script>
 let latest = [];
+let pendingQuantity = 1;
 let recorder = null;
 let chunks = [];
 let recording = false;
@@ -372,11 +373,12 @@ async function apiForm(path, form){
 }
 function renderRecs(data){
   latest=data.recommendations||[];
+  pendingQuantity = Math.max(1, Math.min(Number(data.intent.quantity || 1), 10));
   if(!latest.length){ add("agent","No matching coffee nearby."); return; }
-  add("agent", `Intent: <strong>${data.intent.drink}</strong><div class="cards">${latest.map((x,i)=>`
+  add("agent", `Intent: <strong>${data.intent.drink}</strong>${pendingQuantity > 1 ? ` x ${pendingQuantity}` : ""}<div class="cards">${latest.map((x,i)=>`
     <div class="card"><div class="top"><strong>${i+1}. ${x.shop_name}</strong><strong>$${Number(x.price).toFixed(2)}</strong></div>
     <div class="muted">${x.product_name}</div><span class="pill">${x.distance_km} km</span><span class="pill">${x.wait_minutes} min</span><span class="pill">score ${x.score}</span>
-    <div><button onclick="order(${i})">Order this</button></div></div>`).join("")}</div>`);
+    <div><button onclick="order(${i})">Order ${pendingQuantity > 1 ? pendingQuantity : "this"}</button></div></div>`).join("")}</div>`);
 }
 function setAuthMode(mode){
   authMode = mode;
@@ -411,6 +413,7 @@ function signOut(){
   localStorage.removeItem("coffeeAgentApAccount");
   clearAuthInputs();
   latest = [];
+  pendingQuantity = 1;
   document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove());
   renderAuthState();
 }
@@ -465,9 +468,9 @@ async function order(i){
   try{
     if(!hasPaymentIdentity()){ add("error","Please register or login with an AigenticPay buyer API key first."); renderAuthState(); return; }
     const owner = apAccount.email || "u_001";
-    const o=await api("/api/orders",{method:"POST",body:JSON.stringify({user_id:owner,product_id:x.product_id,quantity:1,idempotency_key:`${owner}-${x.product_id}-${Date.now()}`,buyer_email:apAccount.email,buyer_api_key:apAccount.api_key})});
+    const o=await api("/api/orders",{method:"POST",body:JSON.stringify({user_id:owner,product_id:x.product_id,quantity:pendingQuantity,idempotency_key:`${owner}-${x.product_id}-${pendingQuantity}-${Date.now()}`,buyer_email:apAccount.email,buyer_api_key:apAccount.api_key})});
     add("agent",`Order confirmed: <strong>${o.order_id}</strong><br>Total $${Number(o.total).toFixed(2)}<br>Payment ${o.payment_status}<br>Approval ${o.approval_id||"-"}<br>Tx ${o.tx_hash}${o.explorer_url?`<br><a target="_blank" href="${o.explorer_url}">Explorer</a>`:""}`);
-    latest=[]; document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove()); loadOrders();
+    latest=[]; pendingQuantity = 1; document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove()); loadOrders();
   }catch(e){ add("error",e.message); }
 }
 async function loadOrders(){

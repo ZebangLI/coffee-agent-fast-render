@@ -16,6 +16,7 @@ class DrinkIntent(BaseModel):
     drink: str
     temperature: str | None = None
     size: str = "medium"
+    quantity: int = Field(default=1, ge=1, le=10)
 
 
 class Recommendation(BaseModel):

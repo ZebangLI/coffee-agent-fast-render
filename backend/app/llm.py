@@ -20,13 +20,19 @@ SYSTEM_PROMPT = """
 You extract coffee ordering intent from a short user message.
 Return only JSON. Do not create orders. Do not call tools.
 
-Allowed drink values:
-- latte
-- americano
-- cold brew
+Return these keys:
+- drink: one of latte, americano, cold brew, or null
+- quantity: integer from 1 to 10
+- temperature: hot, iced, or null
+- size: small, medium, large, or medium if not mentioned
+
+Map natural coffee requests to the closest available drink:
+- coffee, black coffee, espresso, drip coffee, regular coffee, 美式, 黑咖啡, 咖啡 -> americano
+- latte, cappuccino, flat white, mocha, macchiato, milk coffee, 拿铁, 卡布奇诺, 摩卡, 奶咖 -> latte
+- cold brew, iced coffee, 冷萃, 冰咖啡 -> cold brew
 
 If the user is not asking for coffee, return {"drink": null}.
-If the drink is unclear, return {"drink": null}.
+If the user asks for coffee but the exact product is unclear, choose the closest available drink.
 Use null for unknown optional fields.
 """
 
@@ -56,7 +62,7 @@ def parse_intent(message: str) -> DrinkIntent | None:
                 "role": "user",
                 "content": (
                     "Extract coffee intent as JSON with keys: "
-                    "drink, temperature, size, milk, budget, pickup_time. "
+                    "drink, quantity, temperature, size, milk, budget, pickup_time. "
                     f"Message: {message}"
                 ),
             },
@@ -195,7 +201,7 @@ def _intent_from_json(data: dict[str, Any]) -> DrinkIntent | None:
     if raw_drink is None:
         return None
 
-    drink = str(raw_drink).lower()
+    drink = _normalize_drink(str(raw_drink))
     if drink in {"", "none", "null", "unknown", "unclear"}:
         return None
 
@@ -207,7 +213,82 @@ def _intent_from_json(data: dict[str, Any]) -> DrinkIntent | None:
         drink=drink,
         temperature=str(temperature).lower() if temperature else None,
         size=str(data.get("size") or "medium").lower(),
+        quantity=_parse_quantity(data.get("quantity")),
     )
+
+
+def _normalize_drink(raw_drink: str) -> str:
+    drink = raw_drink.strip().lower()
+    if drink in {"", "none", "null", "unknown", "unclear"}:
+        return drink
+
+    if any(term in drink for term in ("cold brew", "iced coffee", "冷萃", "冰咖啡")):
+        return "cold brew"
+    if any(
+        term in drink
+        for term in (
+            "latte",
+            "cappuccino",
+            "flat white",
+            "mocha",
+            "macchiato",
+            "milk coffee",
+            "拿铁",
+            "卡布奇诺",
+            "摩卡",
+            "奶咖",
+        )
+    ):
+        return "latte"
+    if any(
+        term in drink
+        for term in (
+            "americano",
+            "coffee",
+            "espresso",
+            "drip",
+            "black coffee",
+            "regular coffee",
+            "美式",
+            "黑咖啡",
+            "咖啡",
+        )
+    ):
+        return "americano"
+    return drink
+
+
+def _parse_quantity(raw_quantity: Any) -> int:
+    if raw_quantity is None:
+        return 1
+
+    chinese_numbers = {
+        "一": 1,
+        "两": 2,
+        "二": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+        "十": 10,
+    }
+    if isinstance(raw_quantity, str):
+        cleaned = raw_quantity.strip().lower()
+        if cleaned in chinese_numbers:
+            return chinese_numbers[cleaned]
+        cleaned = "".join(ch for ch in cleaned if ch.isdigit())
+        if not cleaned:
+            return 1
+        raw_quantity = cleaned
+
+    try:
+        quantity = int(raw_quantity)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(quantity, 10))
 
 
 def _strip_code_fence(text: str) -> str:

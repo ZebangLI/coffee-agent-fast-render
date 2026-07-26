@@ -486,11 +486,11 @@ def _sanitize_agent_decision(
     if action not in {"search", "select_option", "update_quantity", "reorder_last", "unsupported", "chat"}:
         return fallback
 
-    # Local context wins for high-confidence follow-up actions. Small models often
-    # treat phrases like "one more cup" as chatter or a fresh search, but after an
-    # order it should repeat the previous product.
+    # Local context wins for high-confidence actions. Small models sometimes
+    # treats short order phrases like "cold brew 3 cups" as chatter, but the
+    # deterministic parser can identify supported products and follow-ups.
     fallback_action = fallback.get("action")
-    if fallback_action in {"select_option", "update_quantity", "reorder_last"} and action != fallback_action:
+    if fallback_action in {"search", "select_option", "update_quantity", "reorder_last", "unsupported"} and action != fallback_action:
         return fallback
 
     quantity = decision.get("quantity")

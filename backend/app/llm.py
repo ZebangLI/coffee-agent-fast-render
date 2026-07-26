@@ -44,13 +44,14 @@ selected_index is zero-based. Examples:
 - first one, order the first, number one -> 0
 - second one, buy option 2, the Starbucks one -> 1
 - third, last one -> 2
-quantity is the number of drinks the user wants, from 1 to 10.
+quantity is the number of drinks the user explicitly mentions, from 1 to 10.
+If the user does not mention a quantity, use null.
 Examples:
 - 2 coffee at third store -> {"selected_index": 2, "quantity": 2}
-- order the second one -> {"selected_index": 1, "quantity": 1}
+- order the second one -> {"selected_index": 1, "quantity": null}
 - buy three from first -> {"selected_index": 0, "quantity": 3}
-If the user is asking for a new coffee search instead of selecting an existing option, return {"selected_index": null, "quantity": 1}.
-If unclear, return {"selected_index": null, "quantity": 1}.
+If the user is asking for a new coffee search instead of selecting an existing option, return {"selected_index": null, "quantity": null}.
+If unclear, return {"selected_index": null, "quantity": null}.
 """
 
 
@@ -145,7 +146,7 @@ def transcribe_audio(audio: bytes, filename: str, content_type: str) -> str | No
         return None
 
 
-def parse_selection(message: str, option_count: int) -> tuple[int | None, int]:
+def parse_selection(message: str, option_count: int) -> tuple[int | None, int | None]:
     fallback_index = _selection_from_text(message, option_count)
     fallback_quantity = _quantity_from_text(message)
     api_key = os.environ.get("GROQ_API_KEY")
@@ -183,7 +184,9 @@ def parse_selection(message: str, option_count: int) -> tuple[int | None, int]:
             body = json.loads(response.read().decode("utf-8"))
         content = body.get("choices", [{}])[0].get("message", {}).get("content", "{}")
         data = json.loads(_strip_code_fence(content))
-        quantity = _parse_quantity(data.get("quantity") or _quantity_from_text(message))
+        explicit_quantity = fallback_quantity
+        raw_quantity = explicit_quantity if explicit_quantity is not None else data.get("quantity")
+        quantity = _parse_quantity(raw_quantity) if raw_quantity not in (None, "", "null") else None
         raw_index = data.get("selected_index")
         if raw_index is None:
             return fallback_index, quantity
@@ -300,7 +303,7 @@ def _parse_quantity(raw_quantity: Any) -> int:
     return max(1, min(quantity, 10))
 
 
-def _quantity_from_text(message: str) -> int:
+def _quantity_from_text(message: str) -> int | None:
     text = message.lower()
     for pattern in (
         r"\b([1-9]|10)\s*(?:cups?|coffees?|drinks?|lattes?|americanos?)\b",
@@ -327,7 +330,24 @@ def _quantity_from_text(message: str) -> int:
             return quantity
         if re.search(rf"\b(?:buy|order|get|want)\s+{word}\b", text):
             return quantity
-    return 1
+
+    chinese_numbers = {
+        "\u4e00": 1,
+        "\u4e24": 2,
+        "\u4e8c": 2,
+        "\u4e09": 3,
+        "\u56db": 4,
+        "\u4e94": 5,
+        "\u516d": 6,
+        "\u4e03": 7,
+        "\u516b": 8,
+        "\u4e5d": 9,
+        "\u5341": 10,
+    }
+    for word, quantity in chinese_numbers.items():
+        if re.search(rf"(?<!\u7b2c){word}\s*(?:\u676f|\u4e2a)", text):
+            return quantity
+    return None
 
 
 def _selection_from_text(message: str, option_count: int) -> int | None:
@@ -348,7 +368,28 @@ def _selection_from_text(message: str, option_count: int) -> int | None:
         if any(re.search(rf"\b{re.escape(word)}\b", text) for word in words):
             return index
 
+    chinese_ordinals = (
+        "\u7b2c\u4e00",
+        "\u7b2c\u4e8c",
+        "\u7b2c\u4e09",
+        "\u7b2c\u56db",
+        "\u7b2c\u4e94",
+        "\u7b2c\u516d",
+        "\u7b2c\u4e03",
+        "\u7b2c\u516b",
+        "\u7b2c\u4e5d",
+        "\u7b2c\u5341",
+    )
+    for index, word in enumerate(chinese_ordinals[:option_count]):
+        if word in text:
+            return index
+
     match = re.search(r"\b(?:option|store|number|#)\s*([1-9]|10)\b", text)
+    if match:
+        selected_index = int(match.group(1)) - 1
+        if 0 <= selected_index < option_count:
+            return selected_index
+    match = re.search(r"(?:\u9009|\u7b2c)\s*([1-9]|10)\s*(?:\u4e2a|\u9879|\u9009\u9879|\u5bb6|\u5e97)", text)
     if match:
         selected_index = int(match.group(1)) - 1
         if 0 <= selected_index < option_count:

@@ -460,7 +460,9 @@ async function handleUserMessage(message, label){
     try{
       const pick = await api("/api/selection",{method:"POST",body:JSON.stringify({message, option_count:latest.length})});
       if(pick.selected_index !== null && pick.selected_index !== undefined){
-        pendingQuantity = Math.max(1, Math.min(Number(pick.quantity || pendingQuantity || 1), 10));
+        if(pick.quantity !== null && pick.quantity !== undefined){
+          pendingQuantity = Math.max(1, Math.min(Number(pick.quantity), 10));
+        }
         await order(pick.selected_index);
         return;
       }

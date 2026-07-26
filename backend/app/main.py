@@ -327,6 +327,7 @@ def home() -> HTMLResponse:
 <script>
 let latest = [];
 let pendingQuantity = 1;
+let activeCardsMessage = null;
 let recorder = null;
 let chunks = [];
 let recording = false;
@@ -381,10 +382,20 @@ function renderRecs(data){
   latest=data.recommendations||[];
   pendingQuantity = Math.max(1, Math.min(Number(data.intent.quantity || 1), 10));
   if(!latest.length){ add("agent","No matching coffee nearby."); return; }
-  add("agent", `Intent: <strong>${data.intent.drink}</strong>${pendingQuantity > 1 ? ` x ${pendingQuantity}` : ""}<div class="cards">${latest.map((x,i)=>`
+  activeCardsMessage = add("agent", `Intent: <strong>${data.intent.drink}</strong><span class="quantity-label">${pendingQuantity > 1 ? ` x ${pendingQuantity}` : ""}</span><div class="cards">${latest.map((x,i)=>`
     <div class="card"><div class="top"><strong>${i+1}. ${x.shop_name}</strong><strong>$${Number(x.price).toFixed(2)}</strong></div>
     <div class="muted">${x.product_name}</div><span class="pill">${x.distance_km} km</span><span class="pill">${x.wait_minutes} min</span><span class="pill">score ${x.score}</span>
-    <div><button onclick="order(${i})">Order ${pendingQuantity > 1 ? pendingQuantity : "this"}</button></div></div>`).join("")}</div>`);
+    <div><button data-order-button="true" onclick="order(${i})">Order ${pendingQuantity > 1 ? pendingQuantity : "this"}</button></div></div>`).join("")}</div>`);
+}
+function updatePendingQuantity(quantity){
+  pendingQuantity = Math.max(1, Math.min(Number(quantity), 10));
+  if(!activeCardsMessage) return;
+  activeCardsMessage.querySelectorAll(".quantity-label").forEach(el => {
+    el.textContent = pendingQuantity > 1 ? ` x ${pendingQuantity}` : "";
+  });
+  activeCardsMessage.querySelectorAll("[data-order-button='true']").forEach(button => {
+    button.textContent = `Order ${pendingQuantity > 1 ? pendingQuantity : "this"}`;
+  });
 }
 function looksLikeProductRequest(message){
   const text = message.toLowerCase();
@@ -424,6 +435,7 @@ function signOut(){
   clearAuthInputs();
   latest = [];
   pendingQuantity = 1;
+  activeCardsMessage = null;
   document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove());
   renderAuthState();
 }
@@ -465,9 +477,14 @@ async function handleUserMessage(message, label){
       const pick = await api("/api/selection",{method:"POST",body:JSON.stringify({message, option_count:latest.length})});
       if(pick.selected_index !== null && pick.selected_index !== undefined){
         if(pick.quantity !== null && pick.quantity !== undefined){
-          pendingQuantity = Math.max(1, Math.min(Number(pick.quantity), 10));
+          updatePendingQuantity(pick.quantity);
         }
         await order(pick.selected_index);
+        return;
+      }
+      if(pick.quantity !== null && pick.quantity !== undefined){
+        updatePendingQuantity(pick.quantity);
+        add("agent",`Updated quantity to ${pendingQuantity}. Choose first, second, or third when you are ready.`);
         return;
       }
     }catch(e){ add("error",e.message); return; }
@@ -491,7 +508,7 @@ async function order(i){
     const owner = apAccount.email || "u_001";
     const o=await api("/api/orders",{method:"POST",body:JSON.stringify({user_id:owner,product_id:x.product_id,quantity:pendingQuantity,idempotency_key:`${owner}-${x.product_id}-${pendingQuantity}-${Date.now()}`,buyer_email:apAccount.email,buyer_api_key:apAccount.api_key})});
     add("agent",`Order confirmed: <strong>${o.order_id}</strong><br>Total $${Number(o.total).toFixed(2)}<br>Payment ${o.payment_status}<br>Approval ${o.approval_id||"-"}<br>Tx ${o.tx_hash}${o.explorer_url?`<br><a target="_blank" href="${o.explorer_url}">Explorer</a>`:""}`);
-    latest=[]; pendingQuantity = 1; document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove()); loadOrders();
+    latest=[]; pendingQuantity = 1; activeCardsMessage = null; document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove()); loadOrders();
   }catch(e){ add("error",e.message); }
 }
 async function loadOrders(){

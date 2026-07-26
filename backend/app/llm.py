@@ -308,6 +308,7 @@ def _quantity_from_text(message: str) -> int | None:
     for pattern in (
         r"\b([1-9]|10)\s*(?:cups?|coffees?|drinks?|lattes?|americanos?)\b",
         r"\b(?:buy|order|get|want)\s+([1-9]|10)\b",
+        r"\b(?:change|switch|make|update)\s+(?:it\s+)?(?:to\s+)?([1-9]|10)\b",
     ):
         match = re.search(pattern, text)
         if match:

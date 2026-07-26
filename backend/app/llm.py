@@ -12,6 +12,10 @@ from .models import DrinkIntent
 
 DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 DEFAULT_GROQ_TRANSCRIPTION_MODEL = "whisper-large-v3-turbo"
+MAX_ORDER_QUANTITY = 10
+QUANTITY_LIMIT_MESSAGE = (
+    "This demo supports up to 10 drinks per order. Please choose 1 to 10 cups."
+)
 DEFAULT_TRANSCRIPTION_PROMPT = (
     "Coffee ordering app. Common phrases include: I want a latte, "
     "iced americano, cold brew, Starbucks, Campus Cafe, Local Cafe, order this."
@@ -379,7 +383,58 @@ def _parse_quantity(raw_quantity: Any) -> int:
         quantity = int(raw_quantity)
     except (TypeError, ValueError):
         return 1
-    return max(1, min(quantity, 10))
+    return max(1, min(quantity, MAX_ORDER_QUANTITY))
+
+
+def _raw_quantity_value(raw_quantity: Any) -> int | None:
+    if raw_quantity in (None, "", "null"):
+        return None
+    if isinstance(raw_quantity, str):
+        cleaned = "".join(ch for ch in raw_quantity.strip().lower() if ch.isdigit())
+        if not cleaned:
+            return None
+        raw_quantity = cleaned
+    try:
+        return int(raw_quantity)
+    except (TypeError, ValueError):
+        return None
+
+
+def _quantity_above_limit(message: str) -> bool:
+    text = message.lower()
+    for match in re.finditer(
+        r"\b(\d+)\s*(?:cups?|coffees?|drinks?|lattes?|americanos?|more)?\b",
+        text,
+    ):
+        if int(match.group(1)) > MAX_ORDER_QUANTITY:
+            return True
+
+    high_word_numbers = {
+        "eleven": 11,
+        "twelve": 12,
+        "thirteen": 13,
+        "fourteen": 14,
+        "fifteen": 15,
+        "sixteen": 16,
+        "seventeen": 17,
+        "eighteen": 18,
+        "nineteen": 19,
+        "twenty": 20,
+        "thirty": 30,
+        "forty": 40,
+        "fifty": 50,
+        "sixty": 60,
+        "seventy": 70,
+        "eighty": 80,
+        "ninety": 90,
+        "hundred": 100,
+    }
+    if any(re.search(rf"\b{word}\b", text) for word in high_word_numbers):
+        return True
+
+    return bool(
+        re.search(r"(?:\u5341[一二三四五六七八九]|[一二三四五六七八九]\u5341|[一二三四五六七八九]?\u767e)\s*(?:\u676f|\u4e2a)?", message)
+    )
 
 
 def _quantity_from_text(message: str) -> int | None:
@@ -436,6 +491,11 @@ def _quantity_from_text(message: str) -> int | None:
 def _fallback_agent_action(message: str, context: dict[str, Any]) -> dict[str, Any]:
     options = context.get("options") or []
     option_count = len(options)
+    if _quantity_above_limit(message):
+        return {
+            "action": "unsupported",
+            "message": QUANTITY_LIMIT_MESSAGE,
+        }
     quantity = _quantity_from_text(message)
 
     if option_count:
@@ -497,6 +557,12 @@ def _sanitize_agent_decision(
         return fallback
 
     quantity = decision.get("quantity")
+    raw_quantity_value = _raw_quantity_value(quantity)
+    if raw_quantity_value is not None and raw_quantity_value > MAX_ORDER_QUANTITY:
+        return {
+            "action": "unsupported",
+            "message": QUANTITY_LIMIT_MESSAGE,
+        }
     parsed_quantity = None if quantity in (None, "", "null") else _parse_quantity(quantity)
     fallback_quantity = fallback.get("quantity")
     options = context.get("options") or []

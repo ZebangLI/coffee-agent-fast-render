@@ -574,7 +574,7 @@ async function orderProduct(productId, quantity, shopLabel, clearCards){
     add("agent",`Order confirmed: <strong>${o.order_id}</strong><br>Total $${Number(o.total).toFixed(2)}<br>Payment ${o.payment_status}<br>Approval ${o.approval_id||"-"}<br>Tx ${o.tx_hash}${o.explorer_url?`<br><a target="_blank" href="${o.explorer_url}">Explorer</a>`:""}`);
     lastOrder = {product_id:o.product_id, shop_id:o.shop_id, shop_name:shopLabel, quantity:o.quantity};
     if(clearCards){
-      latest=[]; pendingQuantity = 1; activeCardsMessage = null; document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove());
+      pendingQuantity = 1; activeCardsMessage = null; document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove());
     }
     loadOrders();
   }catch(e){ add("error",e.message); }

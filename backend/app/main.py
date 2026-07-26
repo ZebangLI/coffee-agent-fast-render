@@ -386,6 +386,10 @@ function renderRecs(data){
     <div class="muted">${x.product_name}</div><span class="pill">${x.distance_km} km</span><span class="pill">${x.wait_minutes} min</span><span class="pill">score ${x.score}</span>
     <div><button onclick="order(${i})">Order ${pendingQuantity > 1 ? pendingQuantity : "this"}</button></div></div>`).join("")}</div>`);
 }
+function looksLikeProductRequest(message){
+  const text = message.toLowerCase();
+  return /(coffee|latte|americano|cold brew|espresso|mocha|cappuccino|tea|burger|hamburger|pizza|sandwich|buy|order|want|get|\u5496\u5561|\u62ff\u94c1|\u7f8e\u5f0f|\u51b7\u8403|\u51b0\u5496\u5561|\u6c49\u5821|\u62ab\u8428|\u4e09\u660e\u6cbb|\u5976\u8336|\u60f3\u8981|\u8981\u4e00|\u4e70)/.test(text);
+}
 function setAuthMode(mode){
   authMode = mode;
   document.getElementById("tab-register").classList.toggle("active", mode === "register");
@@ -467,6 +471,10 @@ async function handleUserMessage(message, label){
         return;
       }
     }catch(e){ add("error",e.message); return; }
+    if(!looksLikeProductRequest(message)){
+      add("agent",`I kept the current options${pendingQuantity > 1 ? ` for ${pendingQuantity} drinks` : ""}. Choose first, second, or third when you are ready.`);
+      return;
+    }
   }
   add("agent","Checking nearby coffee shops...");
   try{ renderRecs(await api("/api/chat",{method:"POST",body:JSON.stringify({message})})); }catch(e){ add("error",e.message); }

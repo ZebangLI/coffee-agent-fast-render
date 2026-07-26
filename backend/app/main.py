@@ -174,7 +174,10 @@ def create_order(request: CreateOrderRequest) -> OrderResponse:
     if existing:
         return existing
 
-    product = get_product_for_order(request.product_id)
+    try:
+        product = get_product_for_order(request.product_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     if product["inventory"] < request.quantity:
         raise HTTPException(status_code=409, detail="Not enough inventory")
 
@@ -366,6 +369,7 @@ let lastOrder = null;
 let recorder = null;
 let chunks = [];
 let recording = false;
+let orderInFlight = false;
 let apAccount = JSON.parse(localStorage.getItem("coffeeAgentApAccount") || "{}");
 let authMode = "register";
 const log = document.getElementById("log");
@@ -557,6 +561,11 @@ async function order(i){
   await orderProduct(x.product_id, pendingQuantity, x.shop_name, true);
 }
 async function orderProduct(productId, quantity, shopLabel, clearCards){
+  if(orderInFlight){
+    add("agent","I am already placing an order. Please wait for the result.");
+    return;
+  }
+  orderInFlight = true;
   add("agent",`Creating order at <strong>${shopLabel}</strong>...`);
   try{
     if(!hasPaymentIdentity()){ add("error","Please register or login with an AigenticPay buyer API key first."); renderAuthState(); return; }
@@ -569,6 +578,7 @@ async function orderProduct(productId, quantity, shopLabel, clearCards){
     }
     loadOrders();
   }catch(e){ add("error",e.message); }
+  finally{ orderInFlight = false; }
 }
 async function loadOrders(){
   try{

@@ -476,6 +476,10 @@ async function handleUserMessage(message, label){
       return;
     }
   }
+  if(!looksLikeProductRequest(message)){
+    add("agent","No problem. Tell me what coffee you want when you are ready.");
+    return;
+  }
   add("agent","Checking nearby coffee shops...");
   try{ renderRecs(await api("/api/chat",{method:"POST",body:JSON.stringify({message})})); }catch(e){ add("error",e.message); }
 }

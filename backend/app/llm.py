@@ -386,6 +386,7 @@ def _quantity_from_text(message: str) -> int | None:
     text = message.lower()
     for pattern in (
         r"\b([1-9]|10)\s*(?:cups?|coffees?|drinks?|lattes?|americanos?)\b",
+        r"\b([1-9]|10)\s+more\b",
         r"\b(?:buy|order|get|want)\s+([1-9]|10)\b",
         r"\b(?:change|switch|make|update)\s+(?:it\s+)?(?:to\s+)?([1-9]|10)\b",
     ):
@@ -407,6 +408,8 @@ def _quantity_from_text(message: str) -> int | None:
     }
     for word, quantity in word_numbers.items():
         if re.search(rf"\b{word}\s+(?:cups?|coffees?|drinks?|lattes?|americanos?)\b", text):
+            return quantity
+        if re.search(rf"\b{word}\s+more\b", text):
             return quantity
         if re.search(rf"\b(?:buy|order|get|want)\s+{word}\b", text):
             return quantity
@@ -495,6 +498,7 @@ def _sanitize_agent_decision(
 
     quantity = decision.get("quantity")
     parsed_quantity = None if quantity in (None, "", "null") else _parse_quantity(quantity)
+    fallback_quantity = fallback.get("quantity")
     options = context.get("options") or []
 
     if action == "select_option":
@@ -505,10 +509,12 @@ def _sanitize_agent_decision(
             selected_index = _option_index_from_context(message, options)
         if selected_index is None or not (0 <= selected_index < len(options)):
             return fallback
-        return {"action": action, "selected_index": selected_index, "quantity": parsed_quantity}
+        return {"action": action, "selected_index": selected_index, "quantity": parsed_quantity or fallback_quantity}
 
     if action == "update_quantity":
         if parsed_quantity is None:
+            if fallback_quantity is not None:
+                return {"action": action, "quantity": fallback_quantity}
             return fallback
         return {"action": action, "quantity": parsed_quantity}
 
@@ -517,13 +523,13 @@ def _sanitize_agent_decision(
         product_id = decision.get("product_id") or last_order.get("product_id")
         if not product_id:
             return fallback
-        return {"action": action, "product_id": product_id, "quantity": parsed_quantity or 1}
+        return {"action": action, "product_id": product_id, "quantity": parsed_quantity or fallback_quantity or 1}
 
     if action == "search":
         drink = _normalize_drink(str(decision.get("drink") or ""))
         if drink not in {"latte", "americano", "cold brew"}:
             return fallback
-        return {"action": action, "drink": drink, "quantity": parsed_quantity or 1}
+        return {"action": action, "drink": drink, "quantity": parsed_quantity or fallback_quantity or 1}
 
     if action == "unsupported":
         return {
@@ -578,6 +584,9 @@ def _looks_like_quantity_change(message: str) -> bool:
 
 def _looks_like_reorder(message: str) -> bool:
     text = message.lower()
+    number_words = "one|two|three|four|five|six|seven|eight|nine|ten"
+    if re.search(rf"\b(?:[1-9]|10|{number_words})\s+more\b", text):
+        return True
     return any(
         term in text
         for term in (

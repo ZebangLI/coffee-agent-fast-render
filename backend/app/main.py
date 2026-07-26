@@ -422,8 +422,8 @@ function renderRecs(data){
   pendingQuantity = Math.max(1, Math.min(Number(data.intent.quantity || 1), 10));
   if(!latest.length){ add("agent","No matching coffee nearby."); return; }
   activeCardsMessage = add("agent", `Intent: <strong>${data.intent.drink}</strong><span class="quantity-label">${pendingQuantity > 1 ? ` x ${pendingQuantity}` : ""}</span><div class="cards">${latest.map((x,i)=>`
-    <div class="card"><div class="top"><strong>${i+1}. ${x.shop_name}</strong><strong>$${Number(x.price).toFixed(2)}</strong></div>
-    <div class="muted">${x.product_name}</div><span class="pill">${x.distance_km} km</span><span class="pill">${x.wait_minutes} min</span><span class="pill">score ${x.score}</span>
+    <div class="card"><div class="top"><strong>${i+1}. ${x.shop_name}</strong><strong>$${Number(x.price).toFixed(2)} each</strong></div>
+    <div class="muted">${x.product_name}</div><div class="muted total-line" data-unit-price="${Number(x.price)}">Total $${(Number(x.price) * pendingQuantity).toFixed(2)}</div><span class="pill">${x.distance_km} km</span><span class="pill">${x.wait_minutes} min</span><span class="pill">score ${x.score}</span>
     <div><button data-order-button="true" onclick="order(${i})">Order ${pendingQuantity > 1 ? pendingQuantity : "this"}</button></div></div>`).join("")}</div>`);
 }
 function updatePendingQuantity(quantity){
@@ -434,6 +434,10 @@ function updatePendingQuantity(quantity){
   });
   activeCardsMessage.querySelectorAll("[data-order-button='true']").forEach(button => {
     button.textContent = `Order ${pendingQuantity > 1 ? pendingQuantity : "this"}`;
+  });
+  activeCardsMessage.querySelectorAll(".total-line").forEach(line => {
+    const unitPrice = Number(line.dataset.unitPrice || 0);
+    line.textContent = `Total $${(unitPrice * pendingQuantity).toFixed(2)}`;
   });
 }
 function looksLikeProductRequest(message){
@@ -543,7 +547,7 @@ async function handleUserMessage(message, label){
     if(data.action === "reorder_last"){
       const quantity = data.quantity || 1;
       if(!lastOrder || !lastOrder.product_id){ add("agent","I do not have a previous order to repeat yet."); return; }
-      await orderProduct(lastOrder.product_id, quantity, lastOrder.shop_name || lastOrder.shop_id || "your last shop", false);
+      await orderProduct(lastOrder.product_id, quantity, lastOrder.shop_name || lastOrder.shop_id || "your last shop", false, lastOrder.wait_minutes);
       return;
     }
     if(data.action === "unsupported"){
@@ -558,9 +562,13 @@ async function handleUserMessage(message, label){
 }
 async function order(i){
   const x=latest[i]; if(!x) return;
-  await orderProduct(x.product_id, pendingQuantity, x.shop_name, true);
+  await orderProduct(x.product_id, pendingQuantity, x.shop_name, true, x.wait_minutes);
 }
-async function orderProduct(productId, quantity, shopLabel, clearCards){
+function estimatedPickupLabel(waitMinutes){
+  const minutes = Math.max(3, Math.min(Number(waitMinutes || 8), 30));
+  return new Date(Date.now() + minutes * 60000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+}
+async function orderProduct(productId, quantity, shopLabel, clearCards, waitMinutes){
   if(orderInFlight){
     add("agent","I am already placing an order. Please wait for the result.");
     return;
@@ -571,8 +579,9 @@ async function orderProduct(productId, quantity, shopLabel, clearCards){
     if(!hasPaymentIdentity()){ add("error","Please register or login with an AigenticPay buyer API key first."); renderAuthState(); return; }
     const owner = apAccount.email || "u_001";
     const o=await api("/api/orders",{method:"POST",body:JSON.stringify({user_id:owner,product_id:productId,quantity:quantity,idempotency_key:`${owner}-${productId}-${quantity}-${Date.now()}`,buyer_email:apAccount.email,buyer_api_key:apAccount.api_key})});
-    add("agent",`Order confirmed: <strong>${o.order_id}</strong><br>Total $${Number(o.total).toFixed(2)}<br>Payment ${o.payment_status}<br>Approval ${o.approval_id||"-"}<br>Tx ${o.tx_hash}${o.explorer_url?`<br><a target="_blank" href="${o.explorer_url}">Explorer</a>`:""}`);
-    lastOrder = {product_id:o.product_id, shop_id:o.shop_id, shop_name:shopLabel, quantity:o.quantity};
+    const pickupTime = estimatedPickupLabel(waitMinutes);
+    add("agent",`Order confirmed: <strong>${o.order_id}</strong><br>Total $${Number(o.total).toFixed(2)}<br>Pick up at <strong>${shopLabel}</strong><br>Estimated pickup: <strong>${pickupTime}</strong><br>Payment ${o.payment_status}<br>Approval ${o.approval_id||"-"}<br>Tx ${o.tx_hash}${o.explorer_url?`<br><a target="_blank" href="${o.explorer_url}">Explorer</a>`:""}`);
+    lastOrder = {product_id:o.product_id, shop_id:o.shop_id, shop_name:shopLabel, quantity:o.quantity, wait_minutes:waitMinutes};
     if(clearCards){
       pendingQuantity = 1; activeCardsMessage = null; document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove());
     }

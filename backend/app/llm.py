@@ -555,6 +555,8 @@ def _sanitize_agent_decision(
     fallback_action = fallback.get("action")
     if fallback_action in {"search", "select_option", "update_quantity", "reorder_last", "unsupported"} and action != fallback_action:
         return fallback
+    if fallback_action == "unsupported" and fallback.get("message") == QUANTITY_LIMIT_MESSAGE:
+        return fallback
 
     quantity = decision.get("quantity")
     raw_quantity_value = _raw_quantity_value(quantity)
@@ -565,6 +567,7 @@ def _sanitize_agent_decision(
         }
     parsed_quantity = None if quantity in (None, "", "null") else _parse_quantity(quantity)
     fallback_quantity = fallback.get("quantity")
+    resolved_quantity = fallback_quantity or parsed_quantity
     options = context.get("options") or []
 
     if action == "select_option":
@@ -575,27 +578,25 @@ def _sanitize_agent_decision(
             selected_index = _option_index_from_context(message, options)
         if selected_index is None or not (0 <= selected_index < len(options)):
             return fallback
-        return {"action": action, "selected_index": selected_index, "quantity": parsed_quantity or fallback_quantity}
+        return {"action": action, "selected_index": selected_index, "quantity": resolved_quantity}
 
     if action == "update_quantity":
-        if parsed_quantity is None:
-            if fallback_quantity is not None:
-                return {"action": action, "quantity": fallback_quantity}
+        if resolved_quantity is None:
             return fallback
-        return {"action": action, "quantity": parsed_quantity}
+        return {"action": action, "quantity": resolved_quantity}
 
     if action == "reorder_last":
         last_order = context.get("last_order") or {}
         product_id = decision.get("product_id") or last_order.get("product_id")
         if not product_id:
             return fallback
-        return {"action": action, "product_id": product_id, "quantity": parsed_quantity or fallback_quantity or 1}
+        return {"action": action, "product_id": product_id, "quantity": resolved_quantity or 1}
 
     if action == "search":
         drink = _normalize_drink(str(decision.get("drink") or ""))
         if drink not in {"latte", "americano", "cold brew"}:
             return fallback
-        return {"action": action, "drink": drink, "quantity": parsed_quantity or fallback_quantity or 1}
+        return {"action": action, "drink": drink, "quantity": resolved_quantity or 1}
 
     if action == "unsupported":
         return {

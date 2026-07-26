@@ -35,6 +35,23 @@ class ChatResponse(BaseModel):
     recommendations: list[Recommendation]
 
 
+class AgentRequest(BaseModel):
+    user_id: str = "u_001"
+    message: str
+    location: Location = Field(default_factory=Location)
+    context: dict = Field(default_factory=dict)
+
+
+class AgentResponse(BaseModel):
+    action: str
+    message: str | None = None
+    intent: DrinkIntent | None = None
+    recommendations: list[Recommendation] = Field(default_factory=list)
+    selected_index: int | None = None
+    quantity: int | None = Field(default=None, ge=1, le=10)
+    product_id: str | None = None
+
+
 class VoiceChatResponse(ChatResponse):
     transcript: str
 

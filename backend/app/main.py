@@ -19,8 +19,10 @@ from .database import (
     recommend_products,
     update_inventory,
 )
-from .llm import llm_status, parse_intent, parse_selection, transcribe_audio
+from .llm import decide_agent_action, llm_status, parse_intent, parse_selection, transcribe_audio
 from .models import (
+    AgentRequest,
+    AgentResponse,
     ChatRequest,
     ChatResponse,
     AigenticLoginRequest,
@@ -28,6 +30,7 @@ from .models import (
     AigenticRegisterRequest,
     AigenticRegisterResponse,
     CreateOrderRequest,
+    DrinkIntent,
     Location,
     OrderResponse,
     SelectionRequest,
@@ -87,6 +90,37 @@ def aigenticpay_login(request: AigenticLoginRequest) -> AigenticLoginResponse:
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
     return _chat_from_text(request.message, request.location)
+
+
+@app.post("/api/agent", response_model=AgentResponse)
+def agent(request: AgentRequest) -> AgentResponse:
+    decision = decide_agent_action(request.message, request.context)
+    action = decision.get("action") or "chat"
+
+    if action == "search":
+        intent = DrinkIntent(
+            drink=decision.get("drink") or "americano",
+            quantity=decision.get("quantity") or 1,
+        )
+        recommendations = recommend_products(intent.drink, request.location)
+        if not recommendations:
+            return AgentResponse(
+                action="unsupported",
+                message=UNAVAILABLE_PRODUCT_MESSAGE,
+            )
+        return AgentResponse(
+            action="show_options",
+            intent=intent,
+            recommendations=recommendations,
+        )
+
+    return AgentResponse(
+        action=action,
+        message=decision.get("message"),
+        selected_index=decision.get("selected_index"),
+        quantity=decision.get("quantity"),
+        product_id=decision.get("product_id"),
+    )
 
 
 @app.post("/api/selection", response_model=SelectionResponse)
@@ -328,6 +362,7 @@ def home() -> HTMLResponse:
 let latest = [];
 let pendingQuantity = 1;
 let activeCardsMessage = null;
+let lastOrder = null;
 let recorder = null;
 let chunks = [];
 let recording = false;
@@ -436,6 +471,7 @@ function signOut(){
   latest = [];
   pendingQuantity = 1;
   activeCardsMessage = null;
+  lastOrder = null;
   document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove());
   renderAuthState();
 }
@@ -471,44 +507,67 @@ async function submitAuth(){
 }
 async function handleUserMessage(message, label){
   add("user", label || message);
-  if(latest.length){
-    add("agent","Checking your selection...");
-    try{
-      const pick = await api("/api/selection",{method:"POST",body:JSON.stringify({message, option_count:latest.length})});
-      if(pick.selected_index !== null && pick.selected_index !== undefined){
-        if(pick.quantity !== null && pick.quantity !== undefined){
-          updatePendingQuantity(pick.quantity);
+  const thinking = add("agent","Thinking with context...");
+  try{
+    const data = await api("/api/agent",{
+      method:"POST",
+      body:JSON.stringify({
+        message,
+        context:{
+          options:latest,
+          pending_quantity:pendingQuantity,
+          last_order:lastOrder
         }
-        await order(pick.selected_index);
-        return;
-      }
-      if(pick.quantity !== null && pick.quantity !== undefined){
-        updatePendingQuantity(pick.quantity);
-        add("agent",`Updated quantity to ${pendingQuantity}. Choose first, second, or third when you are ready.`);
-        return;
-      }
-    }catch(e){ add("error",e.message); return; }
-    if(!looksLikeProductRequest(message)){
-      add("agent",`I kept the current options${pendingQuantity > 1 ? ` for ${pendingQuantity} drinks` : ""}. Choose first, second, or third when you are ready.`);
+      })
+    });
+    thinking.remove();
+
+    if(data.action === "show_options"){
+      renderRecs(data);
       return;
     }
+    if(data.action === "select_option"){
+      if(data.quantity !== null && data.quantity !== undefined) updatePendingQuantity(data.quantity);
+      await order(data.selected_index);
+      return;
+    }
+    if(data.action === "update_quantity"){
+      updatePendingQuantity(data.quantity);
+      add("agent",`Updated quantity to ${pendingQuantity}. Choose first, second, or third when you are ready.`);
+      return;
+    }
+    if(data.action === "reorder_last"){
+      const quantity = data.quantity || 1;
+      if(!lastOrder || !lastOrder.product_id){ add("agent","I do not have a previous order to repeat yet."); return; }
+      await orderProduct(lastOrder.product_id, quantity, lastOrder.shop_name || lastOrder.shop_id || "your last shop", false);
+      return;
+    }
+    if(data.action === "unsupported"){
+      add("error", data.message || "Sorry, this demo can only order coffee right now. That product is not available yet.");
+      return;
+    }
+    add("agent", data.message || "No problem. Tell me what coffee you want when you are ready.");
+  }catch(e){
+    thinking.remove();
+    add("error",e.message);
   }
-  if(!looksLikeProductRequest(message)){
-    add("agent","No problem. Tell me what coffee you want when you are ready.");
-    return;
-  }
-  add("agent","Checking nearby coffee shops...");
-  try{ renderRecs(await api("/api/chat",{method:"POST",body:JSON.stringify({message})})); }catch(e){ add("error",e.message); }
 }
 async function order(i){
   const x=latest[i]; if(!x) return;
-  add("agent",`Creating order at <strong>${x.shop_name}</strong>...`);
+  await orderProduct(x.product_id, pendingQuantity, x.shop_name, true);
+}
+async function orderProduct(productId, quantity, shopLabel, clearCards){
+  add("agent",`Creating order at <strong>${shopLabel}</strong>...`);
   try{
     if(!hasPaymentIdentity()){ add("error","Please register or login with an AigenticPay buyer API key first."); renderAuthState(); return; }
     const owner = apAccount.email || "u_001";
-    const o=await api("/api/orders",{method:"POST",body:JSON.stringify({user_id:owner,product_id:x.product_id,quantity:pendingQuantity,idempotency_key:`${owner}-${x.product_id}-${pendingQuantity}-${Date.now()}`,buyer_email:apAccount.email,buyer_api_key:apAccount.api_key})});
+    const o=await api("/api/orders",{method:"POST",body:JSON.stringify({user_id:owner,product_id:productId,quantity:quantity,idempotency_key:`${owner}-${productId}-${quantity}-${Date.now()}`,buyer_email:apAccount.email,buyer_api_key:apAccount.api_key})});
     add("agent",`Order confirmed: <strong>${o.order_id}</strong><br>Total $${Number(o.total).toFixed(2)}<br>Payment ${o.payment_status}<br>Approval ${o.approval_id||"-"}<br>Tx ${o.tx_hash}${o.explorer_url?`<br><a target="_blank" href="${o.explorer_url}">Explorer</a>`:""}`);
-    latest=[]; pendingQuantity = 1; activeCardsMessage = null; document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove()); loadOrders();
+    lastOrder = {product_id:o.product_id, shop_id:o.shop_id, shop_name:shopLabel, quantity:o.quantity};
+    if(clearCards){
+      latest=[]; pendingQuantity = 1; activeCardsMessage = null; document.querySelectorAll(".cards").forEach(c=>c.closest(".msg").remove());
+    }
+    loadOrders();
   }catch(e){ add("error",e.message); }
 }
 async function loadOrders(){

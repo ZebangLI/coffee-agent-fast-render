@@ -40,6 +40,11 @@ from .payment import ext_login, ext_register, record_payment
 
 app = FastAPI(title="Coffee Agent Fast Render", version="0.2.0")
 
+UNAVAILABLE_PRODUCT_MESSAGE = (
+    "Sorry, this demo can only order coffee right now. "
+    "That product is not available yet."
+)
+
 
 @app.on_event("startup")
 def startup() -> None:
@@ -111,7 +116,7 @@ async def voice_chat(
             raise HTTPException(
                 status_code=503,
                 detail={
-                    "message": "Cloud LLM did not detect a coffee order.",
+                    "message": UNAVAILABLE_PRODUCT_MESSAGE,
                     "transcript": transcript,
                 },
             ) from exc
@@ -209,7 +214,7 @@ def api_update_inventory(product_id: str, request: UpdateInventoryRequest) -> di
 def _chat_from_text(message: str, location: Location) -> ChatResponse:
     intent = parse_intent(message)
     if intent is None:
-        raise HTTPException(status_code=503, detail="Cloud LLM did not detect a coffee order.")
+        raise HTTPException(status_code=503, detail=UNAVAILABLE_PRODUCT_MESSAGE)
     recommendations = recommend_products(intent.drink, location)
     return ChatResponse(intent=intent, recommendations=recommendations)
 

@@ -91,7 +91,8 @@ def chat(request: ChatRequest) -> ChatResponse:
 
 @app.post("/api/selection", response_model=SelectionResponse)
 def selection(request: SelectionRequest) -> SelectionResponse:
-    return SelectionResponse(selected_index=parse_selection(request.message, request.option_count))
+    selected_index, quantity = parse_selection(request.message, request.option_count)
+    return SelectionResponse(selected_index=selected_index, quantity=quantity)
 
 
 @app.post("/api/voice/transcribe", response_model=TranscriptionResponse)
@@ -459,6 +460,7 @@ async function handleUserMessage(message, label){
     try{
       const pick = await api("/api/selection",{method:"POST",body:JSON.stringify({message, option_count:latest.length})});
       if(pick.selected_index !== null && pick.selected_index !== undefined){
+        pendingQuantity = Math.max(1, Math.min(Number(pick.quantity || pendingQuantity || 1), 10));
         await order(pick.selected_index);
         return;
       }

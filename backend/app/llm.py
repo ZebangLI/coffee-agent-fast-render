@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 import urllib.error
 import urllib.request
@@ -38,13 +39,18 @@ Use null for unknown optional fields.
 
 SELECTION_PROMPT = """
 You interpret whether a user is selecting one item from a numbered recommendation list.
-Return only JSON with this exact key: selected_index.
+Return only JSON with these exact keys: selected_index, quantity.
 selected_index is zero-based. Examples:
 - first one, order the first, number one -> 0
 - second one, buy option 2, the Starbucks one -> 1
 - third, last one -> 2
-If the user is asking for a new coffee search instead of selecting an existing option, return {"selected_index": null}.
-If unclear, return {"selected_index": null}.
+quantity is the number of drinks the user wants, from 1 to 10.
+Examples:
+- 2 coffee at third store -> {"selected_index": 2, "quantity": 2}
+- order the second one -> {"selected_index": 1, "quantity": 1}
+- buy three from first -> {"selected_index": 0, "quantity": 3}
+If the user is asking for a new coffee search instead of selecting an existing option, return {"selected_index": null, "quantity": 1}.
+If unclear, return {"selected_index": null, "quantity": 1}.
 """
 
 
@@ -139,10 +145,12 @@ def transcribe_audio(audio: bytes, filename: str, content_type: str) -> str | No
         return None
 
 
-def parse_selection(message: str, option_count: int) -> int | None:
+def parse_selection(message: str, option_count: int) -> tuple[int | None, int]:
+    fallback_index = _selection_from_text(message, option_count)
+    fallback_quantity = _quantity_from_text(message)
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        return None
+        return fallback_index, fallback_quantity
 
     payload = {
         "model": os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL),
@@ -175,15 +183,16 @@ def parse_selection(message: str, option_count: int) -> int | None:
             body = json.loads(response.read().decode("utf-8"))
         content = body.get("choices", [{}])[0].get("message", {}).get("content", "{}")
         data = json.loads(_strip_code_fence(content))
+        quantity = _parse_quantity(data.get("quantity") or _quantity_from_text(message))
         raw_index = data.get("selected_index")
         if raw_index is None:
-            return None
+            return fallback_index, quantity
         selected_index = int(raw_index)
         if 0 <= selected_index < option_count:
-            return selected_index
-        return None
+            return selected_index, quantity
+        return fallback_index, quantity
     except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return None
+        return fallback_index, fallback_quantity
 
 
 def llm_status() -> dict[str, Any]:
@@ -289,6 +298,62 @@ def _parse_quantity(raw_quantity: Any) -> int:
     except (TypeError, ValueError):
         return 1
     return max(1, min(quantity, 10))
+
+
+def _quantity_from_text(message: str) -> int:
+    text = message.lower()
+    for pattern in (
+        r"\b([1-9]|10)\s*(?:cups?|coffees?|drinks?|lattes?|americanos?)\b",
+        r"\b(?:buy|order|get|want)\s+([1-9]|10)\b",
+    ):
+        match = re.search(pattern, text)
+        if match:
+            return _parse_quantity(match.group(1))
+
+    word_numbers = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+    }
+    for word, quantity in word_numbers.items():
+        if re.search(rf"\b{word}\s+(?:cups?|coffees?|drinks?|lattes?|americanos?)\b", text):
+            return quantity
+        if re.search(rf"\b(?:buy|order|get|want)\s+{word}\b", text):
+            return quantity
+    return 1
+
+
+def _selection_from_text(message: str, option_count: int) -> int | None:
+    text = message.lower()
+    ordinals = (
+        ("first", "1st"),
+        ("second", "2nd"),
+        ("third", "3rd"),
+        ("fourth", "4th"),
+        ("fifth", "5th"),
+        ("sixth", "6th"),
+        ("seventh", "7th"),
+        ("eighth", "8th"),
+        ("ninth", "9th"),
+        ("tenth", "10th"),
+    )
+    for index, words in enumerate(ordinals[:option_count]):
+        if any(re.search(rf"\b{re.escape(word)}\b", text) for word in words):
+            return index
+
+    match = re.search(r"\b(?:option|store|number|#)\s*([1-9]|10)\b", text)
+    if match:
+        selected_index = int(match.group(1)) - 1
+        if 0 <= selected_index < option_count:
+            return selected_index
+    return None
 
 
 def _strip_code_fence(text: str) -> str:

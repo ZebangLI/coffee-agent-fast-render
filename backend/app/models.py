@@ -50,6 +50,7 @@ class SelectionRequest(BaseModel):
 
 class SelectionResponse(BaseModel):
     selected_index: int | None = None
+    quantity: int = Field(default=1, ge=1, le=10)
 
 
 class CreateOrderRequest(BaseModel):
